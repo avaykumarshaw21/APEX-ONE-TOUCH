@@ -28,6 +28,8 @@ import {
   TrackWeather,
   CameraZoomMode,
   RaceReplayData,
+  GhostLapSample,
+  TrackGhostLap,
 } from './game/types';
 import {
   bakeTrack,
@@ -54,10 +56,18 @@ import {
   recordReplayFrame,
   sampleReplayAtTime,
 } from './game/replay';
+import {
+  buildGhostCarEntity,
+  computeGhostSplit,
+  recordGhostSample,
+  sampleGhostAtTime,
+  shouldUpdateGhostRecord,
+} from './game/ghost';
 import { GameRenderer } from './game/renderer';
 import { sound } from './game/audio';
 
 const STORAGE_KEY = 'apex_one_touch_racing_v1';
+const GHOST_STORAGE_KEY = 'apex_one_touch_ghosts_v1';
 
 function getCountdownDisplay(timer: number): number {
   if (timer > 2.4) return 3;
@@ -80,6 +90,22 @@ export default function App() {
   const [autoDriftAssist, setAutoDriftAssist] = useState<boolean>(true);
   const [cameraZoom, setCameraZoom] = useState<CameraZoomMode>('normal');
   const [lastRacePrize, setLastRacePrize] = useState<number>(0);
+  const [raceAgainstGhost, setRaceAgainstGhost] = useState<boolean>(false);
+  const [ghostLaps, setGhostLaps] = useState<{ [trackId: string]: TrackGhostLap }>(() => {
+    try {
+      const saved = localStorage.getItem(GHOST_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          return parsed;
+        }
+      }
+    } catch {
+      // Ignore
+    }
+    return {};
+  });
+  const ghostLapsRef = useRef<{ [trackId: string]: TrackGhostLap }>(ghostLaps);
 
   // Player persistent progress (with safe defaults for migrating saved v1 state)
   const [progress, setProgress] = useState<PlayerProgress>(() => {
@@ -125,6 +151,16 @@ export default function App() {
       // Ignore
     }
   }, [progress]);
+
+  // Keep ghostLaps ref synced and persisted
+  useEffect(() => {
+    ghostLapsRef.current = ghostLaps;
+    try {
+      localStorage.setItem(GHOST_STORAGE_KEY, JSON.stringify(ghostLaps));
+    } catch {
+      // Ignore
+    }
+  }, [ghostLaps]);
 
   // Sync document body state
   useEffect(() => {
@@ -202,6 +238,12 @@ export default function App() {
     comboTimer: number;
     knockoutTimer: number;
     nextNotifId: number;
+    isGhostDuel: boolean;
+    activeGhostLap: TrackGhostLap | null;
+    ghostCar: CarEntity | null;
+    lapGhostSamples: GhostLapSample[];
+    ghostElapsed: number;
+    ghostDeltaSeconds: number | null;
   }>({
     cars: [],
     playerCar: null,
@@ -226,6 +268,12 @@ export default function App() {
     comboTimer: 0,
     knockoutTimer: 12.0,
     nextNotifId: 1,
+    isGhostDuel: false,
+    activeGhostLap: null,
+    ghostCar: null,
+    lapGhostSamples: [],
+    ghostElapsed: 0,
+    ghostDeltaSeconds: null,
   });
 
   // Throttled React state for HUD updates
@@ -248,6 +296,7 @@ export default function App() {
     comboCount: number;
     knockoutTimer: number;
     activeRacersCount: number;
+    ghostDeltaSeconds: number | null;
   }>({
     rank: 1,
     speed: 0,
@@ -267,12 +316,19 @@ export default function App() {
     comboCount: 0,
     knockoutTimer: 12,
     activeRacersCount: 5,
+    ghostDeltaSeconds: null,
   });
 
   const activeCarStats = CARS.find((c) => c.id === progress.selectedCarId) || CARS[0];
 
   // Helper to initialize car entities on the starting grid
-  const initializeGrid = (track: TrackDefinition, rivalsCount: OpponentCount) => {
+  const initializeGrid = (
+    track: TrackDefinition,
+    rivalsCount: OpponentCount,
+    ghostModeOverride?: boolean
+  ) => {
+    const isGhostDuel = ghostModeOverride ?? raceAgainstGhost;
+    const actualRivalsCount = isGhostDuel ? 0 : rivalsCount;
     const baked = bakeTrack(track.points);
     bakedTrackRef.current = baked;
 
@@ -293,8 +349,8 @@ export default function App() {
       name: 'YOU',
       isPlayer: true,
       carStats: effectivePlayerStats,
-      x: startSample.x - startSample.nx * (roadHalf * 0.4),
-      y: startSample.y - startSample.ny * (roadHalf * 0.4),
+      x: isGhostDuel ? startSample.x : startSample.x - startSample.nx * (roadHalf * 0.4),
+      y: isGhostDuel ? startSample.y : startSample.y - startSample.ny * (roadHalf * 0.4),
       vx: 0,
       vy: 0,
       angle: startSample.angle,
@@ -329,7 +385,7 @@ export default function App() {
     };
     createdCars.push(playerEntity);
 
-    for (let i = 0; i < rivalsCount; i++) {
+    for (let i = 0; i < actualRivalsCount; i++) {
       const rivalConfig = AI_RIVALS_POOL[i % AI_RIVALS_POOL.length];
       const gridRow = Math.floor((i + 1) / 2);
       const gridCol = (i + 1) % 2 === 0 ? 1 : -1;
@@ -417,6 +473,21 @@ export default function App() {
     simState.current.comboTimer = 0;
     simState.current.knockoutTimer = 12.0;
 
+    const savedGhost = isGhostDuel ? ghostLapsRef.current[track.id] || null : null;
+    simState.current.isGhostDuel = isGhostDuel;
+    simState.current.activeGhostLap = savedGhost;
+    simState.current.lapGhostSamples = [];
+    simState.current.ghostElapsed = 0;
+    simState.current.ghostDeltaSeconds = savedGhost ? 0 : null;
+    if (savedGhost) {
+      const firstGhostSample =
+        sampleGhostAtTime(savedGhost, 0, { loop: false }) || savedGhost.samples[0];
+      const ghostCarStats = CARS.find((c) => c.id === savedGhost.carId) || activeCarStats;
+      simState.current.ghostCar = buildGhostCarEntity(savedGhost, firstGhostSample, ghostCarStats, 2, 0, 0);
+    } else {
+      simState.current.ghostCar = null;
+    }
+
     if (rendererRef.current) {
       rendererRef.current.cameraX = playerEntity.x;
       rendererRef.current.cameraY = playerEntity.y;
@@ -446,7 +517,19 @@ export default function App() {
     sound.resume();
     sound.startEngine();
     setSavedReplay(null);
-    initializeGrid(selectedTrack, opponentCount);
+    initializeGrid(selectedTrack, opponentCount, raceAgainstGhost);
+    setGameState('playing');
+  };
+
+  // Start 1v1 Ghost Duel directly for a chosen track
+  const startGhostRace = (targetTrack?: TrackDefinition) => {
+    const trackToUse = targetTrack || selectedTrack;
+    setSelectedTrack(trackToUse);
+    setRaceAgainstGhost(true);
+    sound.resume();
+    sound.startEngine();
+    setSavedReplay(null);
+    initializeGrid(trackToUse, opponentCount, true);
     setGameState('playing');
   };
 
@@ -686,7 +769,11 @@ export default function App() {
         height,
         now / 1000,
         weather,
-        cameraZoom
+        cameraZoom,
+        undefined,
+        gameState === 'playing' || gameState === 'paused' || gameState === 'gameover'
+          ? simState.current.ghostCar
+          : null
       );
 
       if (gameState === 'playing' && replayDataRef.current && !simState.current.isRaceFinished) {
@@ -724,6 +811,7 @@ export default function App() {
           comboCount: simState.current.comboCount,
           knockoutTimer: Math.max(0, simState.current.knockoutTimer),
           activeRacersCount,
+          ghostDeltaSeconds: simState.current.ghostDeltaSeconds,
         });
       }
 
@@ -802,8 +890,8 @@ export default function App() {
 
     const isRacing = simState.current.countdownTimer <= 0.4;
 
-    // 0.5 Knockout Elimination Timer
-    if (isRacing && raceMode === 'knockout') {
+    // 0.5 Knockout Elimination Timer (disabled in 1v1 Ghost Duel)
+    if (isRacing && raceMode === 'knockout' && !simState.current.isGhostDuel) {
       simState.current.knockoutTimer -= dt;
       if (simState.current.knockoutTimer <= 0) {
         simState.current.knockoutTimer = 12.0;
@@ -1033,18 +1121,61 @@ export default function App() {
       const progressT = currentTrackIndex / baked.samples.length;
 
       if (car.lastProgress > 0.85 && progressT < 0.15) {
+        const completedLapTime = car.currentLapTime;
         car.currentLap += 1;
-        if (car.currentLapTime < car.bestLapTime) {
-          car.bestLapTime = car.currentLapTime;
+        if (completedLapTime < car.bestLapTime) {
+          car.bestLapTime = completedLapTime;
         }
         car.currentLapTime = 0;
 
         if (car.isPlayer) {
           sound.playLapChime();
-          spawnNotification(`LAP ${car.currentLap} COMPLETED!`, car.x, car.y - 45, '#22c55e');
+
+          recordGhostSample(simState.current.lapGhostSamples, completedLapTime, car, {
+            force: true,
+          });
+          const completedGhostSamples = [...simState.current.lapGhostSamples];
+          simState.current.lapGhostSamples = [];
+          recordGhostSample(simState.current.lapGhostSamples, 0, car, { force: true });
+
+          const existingGhost = ghostLapsRef.current[track.id];
+          if (shouldUpdateGhostRecord(existingGhost, completedLapTime, completedGhostSamples.length)) {
+            const newGhost: TrackGhostLap = {
+              trackId: track.id,
+              lapTime: completedLapTime,
+              carId: progress.selectedCarId,
+              recordedAt: Date.now(),
+              samples: completedGhostSamples,
+            };
+            const updatedGhosts = {
+              ...ghostLapsRef.current,
+              [track.id]: newGhost,
+            };
+            ghostLapsRef.current = updatedGhosts;
+            setGhostLaps(updatedGhosts);
+
+            if (simState.current.isGhostDuel && !simState.current.activeGhostLap && car.currentLap < track.laps) {
+              simState.current.activeGhostLap = newGhost;
+              simState.current.ghostElapsed = 0;
+            }
+
+            spawnNotification(
+              'NEW GHOST RECORD!',
+              car.x,
+              car.y - 45,
+              '#38bdf8',
+              `${completedLapTime.toFixed(2)}s BEST LAP`
+            );
+          } else {
+            spawnNotification(`LAP ${car.currentLap} COMPLETED!`, car.x, car.y - 45, '#22c55e');
+          }
         }
 
-        if (raceMode !== 'knockout' && car.currentLap >= track.laps && !car.isFinished) {
+        if (
+          (raceMode !== 'knockout' || simState.current.isGhostDuel) &&
+          car.currentLap >= track.laps &&
+          !car.isFinished
+        ) {
           car.isFinished = true;
           car.finishTime = (timeMs - simState.current.raceStartTime) / 1000;
 
@@ -1056,6 +1187,42 @@ export default function App() {
       car.lastProgress = progressT;
       car.lapProgress = progressT;
       car.totalDistance = car.currentLap * baked.totalLength + progressT * baked.totalLength;
+    }
+
+    // 3.5 Record player's live lap trajectory & update Ghost car opponent
+    if (isRacing && !playerCar.isFinished) {
+      if (simState.current.lapGhostSamples.length === 0) {
+        recordGhostSample(simState.current.lapGhostSamples, 0, playerCar, { force: true });
+      } else {
+        recordGhostSample(simState.current.lapGhostSamples, playerCar.currentLapTime, playerCar);
+      }
+
+      const activeGhost = simState.current.activeGhostLap;
+      if (activeGhost) {
+        simState.current.ghostElapsed += dt;
+        const gSample = sampleGhostAtTime(activeGhost, simState.current.ghostElapsed, { loop: true });
+        if (gSample) {
+          const split = computeGhostSplit(
+            playerCar.totalDistance,
+            activeGhost,
+            simState.current.ghostElapsed,
+            gSample,
+            baked
+          );
+          const ghostCarStats = CARS.find((c) => c.id === activeGhost.carId) || activeCarStats;
+          const ghostCar = buildGhostCarEntity(
+            activeGhost,
+            gSample,
+            ghostCarStats,
+            split.isAhead ? 2 : 1,
+            split.ghostLap,
+            split.ghostTotalDistance
+          );
+          ghostCar.isFinished = split.ghostLap >= track.laps;
+          simState.current.ghostCar = ghostCar;
+          simState.current.ghostDeltaSeconds = split.deltaSeconds;
+        }
+      }
     }
 
     // 5. Near-Miss Overtake Detection for Player
@@ -1219,7 +1386,13 @@ export default function App() {
       }
     }
 
-    calculateRaceRanks(cars);
+    if (simState.current.isGhostDuel && simState.current.ghostCar && simState.current.activeGhostLap) {
+      const ghostAhead = simState.current.ghostCar.totalDistance > playerCar.totalDistance;
+      playerCar.rank = ghostAhead ? 2 : 1;
+      simState.current.ghostCar.rank = ghostAhead ? 1 : 2;
+    } else {
+      calculateRaceRanks(cars);
+    }
   };
 
   // Race Finish handler
@@ -1522,6 +1695,10 @@ export default function App() {
           raceMode={raceMode}
           knockoutTimer={hudState.knockoutTimer}
           activeRacersCount={hudState.activeRacersCount}
+          ghostCar={simState.current.ghostCar}
+          ghostDeltaSeconds={hudState.ghostDeltaSeconds}
+          ghostBestLapTime={simState.current.activeGhostLap?.lapTime ?? null}
+          isGhostDuel={simState.current.isGhostDuel}
         />
       )}
 
@@ -1576,9 +1753,13 @@ export default function App() {
           onSelectTrack={(t) => setSelectedTrack(t)}
           opponentCount={opponentCount}
           onSetOpponentCount={(c) => setOpponentCount(c)}
+          raceAgainstGhost={raceAgainstGhost}
+          onToggleRaceAgainstGhost={(enabled) => setRaceAgainstGhost(enabled)}
+          onLaunchGhostRace={(t) => startGhostRace(t)}
           onClose={() => setGameState('title')}
           onStartRace={startRace}
           bestLapTimes={progress.bestLapTimes}
+          ghostLaps={ghostLaps}
         />
       )}
 
@@ -1654,7 +1835,11 @@ export default function App() {
       {gameState === 'gameover' && simState.current.playerCar && (
         <RaceResultModal
           playerCar={simState.current.playerCar}
-          cars={simState.current.cars}
+          cars={
+            simState.current.isGhostDuel && simState.current.ghostCar
+              ? [...simState.current.cars, simState.current.ghostCar]
+              : simState.current.cars
+          }
           track={selectedTrack}
           raceMode={raceMode}
           coinsEarned={lastRacePrize}

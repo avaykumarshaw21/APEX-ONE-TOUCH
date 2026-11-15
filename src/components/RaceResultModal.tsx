@@ -155,7 +155,7 @@ export const RaceResultModal: React.FC<RaceResultModalProps> = ({
                     <span>Lap: {car.bestLapTime.toFixed(1)}s</span>
                   )}
                   <span className="font-bold text-white">
-                    {car.isEliminated ? 'KO' : car.isFinished ? 'FINISHED' : 'RACING'}
+                    {car.isEliminated ? 'KO' : car.isFinished ? 'FINISHED' : car.isGhost ? 'GHOST' : 'RACING'}
                   </span>
                 </div>
               </div>

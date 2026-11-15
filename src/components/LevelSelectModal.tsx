@@ -4,18 +4,22 @@
  */
 
 import React from 'react';
-import { X, Play, Shield, Flag, Award, Sparkles } from 'lucide-react';
+import { X, Play, Shield, Flag, Award, Ghost } from 'lucide-react';
 import { TRACKS } from '../game/tracks';
-import { TrackDefinition, OpponentCount } from '../game/types';
+import { TrackDefinition, OpponentCount, TrackGhostLap } from '../game/types';
 
 interface LevelSelectModalProps {
   currentTrackId: string;
   onSelectTrack: (track: TrackDefinition) => void;
   opponentCount: OpponentCount;
   onSetOpponentCount: (count: OpponentCount) => void;
+  raceAgainstGhost: boolean;
+  onToggleRaceAgainstGhost: (enabled: boolean) => void;
+  onLaunchGhostRace: (track?: TrackDefinition) => void;
   onClose: () => void;
   onStartRace: () => void;
   bestLapTimes: { [trackId: string]: number };
+  ghostLaps: { [trackId: string]: TrackGhostLap };
 }
 
 export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
@@ -23,13 +27,21 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
   onSelectTrack,
   opponentCount,
   onSetOpponentCount,
+  raceAgainstGhost,
+  onToggleRaceAgainstGhost,
+  onLaunchGhostRace,
   onClose,
   onStartRace,
   bestLapTimes,
+  ghostLaps,
 }) => {
+  const selectedTrack = TRACKS.find((t) => t.id === currentTrackId) || TRACKS[0];
+  const selectedGhost = ghostLaps[currentTrackId];
+  const selectedBestTime = bestLapTimes[currentTrackId];
+
   return (
-    <div className="fixed inset-0 z-40 bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-3 select-none text-white">
-      <div className="w-full max-w-xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
+    <div className="fixed inset-0 z-40 bg-slate-950/95 flex items-center justify-center p-3 select-none text-white">
+      <div className="w-full max-w-xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden">
         {/* Modal Header */}
         <div className="flex items-center justify-between p-4 border-b border-slate-800">
           <div>
@@ -38,46 +50,100 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
               Championship Tracks
             </h2>
             <p className="text-xs text-slate-400 font-mono">
-              Pick your circuit and configure rival AI field
+              Pick your circuit, AI grid, or race against your Best Lap Ghost
             </p>
           </div>
           <button
+            type="button"
             onClick={onClose}
             aria-label="Close track selection"
-            className="w-8 h-8 rounded-lg bg-slate-800 flex items-center justify-center text-slate-400 hover:text-white"
+            className="min-w-[44px] min-h-[44px] rounded-xl bg-slate-800 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer"
           >
             <X size={16} />
           </button>
         </div>
 
-        {/* Global AI Competitor Grid Setting */}
-        <div className="bg-slate-950/80 px-4 py-3 border-b border-slate-800/80 flex flex-col gap-2">
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-slate-400 font-mono uppercase text-[10px] tracking-wider flex items-center gap-1.5">
-              <Shield size={13} className="text-amber-400" /> Grid Size Override
-            </span>
-            <span className="text-xs font-bold text-amber-300">
-              {opponentCount} Automated AI Cars ({opponentCount + 1} Racers)
-            </span>
-          </div>
+        {/* Global AI Competitor Grid & Race Against Ghost Settings */}
+        <div className="bg-slate-950/80 px-4 py-3 border-b border-slate-800/80 flex flex-col gap-3">
+          {/* Race Against Ghost Option */}
+          <button
+            type="button"
+            aria-pressed={raceAgainstGhost}
+            onClick={() => onToggleRaceAgainstGhost(!raceAgainstGhost)}
+            className={`w-full min-h-[48px] px-3.5 py-2.5 rounded-xl border transition-all flex items-center justify-between gap-3 text-left cursor-pointer ${
+              raceAgainstGhost
+                ? 'bg-cyan-500/15 border-cyan-400 text-white shadow-md shadow-cyan-500/10'
+                : 'bg-slate-900/80 border-slate-800 text-slate-200 hover:border-slate-700'
+            }`}
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div
+                className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+                  raceAgainstGhost ? 'bg-cyan-500 text-slate-950' : 'bg-slate-800 text-cyan-400'
+                }`}
+              >
+                <Ghost size={18} />
+              </div>
+              <div className="min-w-0">
+                <div className="text-xs font-black uppercase tracking-wide flex items-center gap-2">
+                  <span>Race against Ghost</span>
+                </div>
+                <p className="text-[11px] font-mono text-slate-400">
+                  {selectedGhost
+                    ? `Target: ${selectedGhost.lapTime.toFixed(2)}s Best Lap · 1v1`
+                    : selectedBestTime && selectedBestTime < 999
+                    ? `Finish 1 lap to record Ghost (Best: ${selectedBestTime.toFixed(2)}s)`
+                    : `Finish 1 lap on ${selectedTrack.name} to record Ghost`}
+                </p>
+              </div>
+            </div>
 
-          <div className="grid grid-cols-3 gap-2">
-            {([4, 6, 8] as OpponentCount[]).map((count) => {
-              const active = opponentCount === count;
-              return (
-                <button
-                  key={count}
-                  onClick={() => onSetOpponentCount(count)}
-                  className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all border ${
-                    active
-                      ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md font-black italic'
-                      : 'bg-slate-800/80 text-slate-300 border-slate-700 hover:bg-slate-700'
-                  }`}
-                >
-                  {count} AI Cars
-                </button>
-              );
-            })}
+            <span
+              className={`text-[11px] font-mono font-black uppercase px-2.5 py-1 rounded-lg shrink-0 ${
+                raceAgainstGhost
+                  ? 'bg-cyan-400 text-slate-950'
+                  : 'bg-slate-800 text-slate-400'
+              }`}
+            >
+              {raceAgainstGhost ? 'ON' : 'OFF'}
+            </span>
+          </button>
+
+          {/* AI Grid Size Override */}
+          <div className={`flex flex-col gap-2 transition-opacity ${raceAgainstGhost ? 'opacity-50' : ''}`}>
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-slate-400 font-mono uppercase text-[10px] tracking-wider flex items-center gap-1.5">
+                <Shield size={13} className="text-amber-400" /> Grid Size Override
+              </span>
+              <span className="text-xs font-bold text-amber-300">
+                {raceAgainstGhost
+                  ? '1v1 Ghost Duel (AI Traffic Off)'
+                  : `${opponentCount} Automated AI Cars (${opponentCount + 1} Racers)`}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              {([4, 6, 8] as OpponentCount[]).map((count) => {
+                const active = !raceAgainstGhost && opponentCount === count;
+                return (
+                  <button
+                    key={count}
+                    type="button"
+                    onClick={() => {
+                      if (raceAgainstGhost) onToggleRaceAgainstGhost(false);
+                      onSetOpponentCount(count);
+                    }}
+                    className={`min-h-[40px] py-1.5 px-2 rounded-lg text-xs font-bold transition-all border cursor-pointer ${
+                      active
+                        ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md font-black italic'
+                        : 'bg-slate-800/80 text-slate-300 border-slate-700 hover:bg-slate-700'
+                    }`}
+                  >
+                    {count} AI Cars
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
 
@@ -85,7 +151,8 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
         <div className="p-4 overflow-y-auto space-y-3 flex-1">
           {TRACKS.map((track) => {
             const isSelected = track.id === currentTrackId;
-            const bestTime = bestLapTimes[track.id];
+            const trackGhost = ghostLaps[track.id];
+            const bestTime = trackGhost?.lapTime ?? bestLapTimes[track.id];
 
             return (
               <div
@@ -93,50 +160,82 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
                 onClick={() => onSelectTrack(track)}
                 className={`p-3.5 rounded-xl border transition-all cursor-pointer flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
                   isSelected
-                    ? 'bg-slate-800/90 border-red-500 shadow-lg shadow-red-500/10'
+                    ? raceAgainstGhost
+                      ? 'bg-slate-800/90 border-cyan-400 shadow-lg shadow-cyan-500/10'
+                      : 'bg-slate-800/90 border-red-500 shadow-lg shadow-red-500/10'
                     : 'bg-slate-950/60 border-slate-800 hover:border-slate-700 hover:bg-slate-800/40'
                 }`}
               >
-                <div className="flex items-center gap-3">
-                  {/* Track Color Pill */}
+                <div className="flex items-center gap-3 min-w-0">
+                  {/* Difficulty Badge */}
                   <div
-                    className="w-12 h-12 rounded-xl flex items-center justify-center font-black text-sm italic shadow-inner"
-                    style={{ backgroundColor: `${track.previewColor}22`, color: track.previewColor, border: `1px solid ${track.previewColor}66` }}
+                    className="w-12 h-12 rounded-xl flex items-center justify-center font-black text-sm italic shadow-inner shrink-0"
+                    style={{
+                      backgroundColor: `${track.previewColor}22`,
+                      color: track.previewColor,
+                      border: `1px solid ${track.previewColor}66`,
+                    }}
                   >
                     {track.difficulty.slice(0, 3).toUpperCase()}
                   </div>
 
-                  <div>
-                    <div className="flex items-center gap-2">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="font-black italic text-sm text-white">{track.name}</h3>
-                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">
+                      <span className="text-[11px] font-mono text-slate-400">
                         {track.laps} Laps
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-400 mt-0.5">{track.subtitle}</p>
 
-                    {bestTime && (
-                      <div className="flex items-center gap-1 mt-1 text-[10px] text-emerald-400 font-mono">
-                        <Award size={11} />
+                    {bestTime && bestTime < 999 && (
+                      <div className="flex items-center gap-1.5 mt-1 text-[10px] font-mono text-emerald-400">
+                        <Award size={11} className="shrink-0" />
                         <span>Best Lap: {bestTime.toFixed(2)}s</span>
+                        {trackGhost && (
+                          <>
+                            <span className="text-slate-600" aria-hidden="true">·</span>
+                            <span className="text-cyan-300 font-bold">Ghost Ready</span>
+                          </>
+                        )}
                       </div>
                     )}
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                <div className="flex items-center gap-2 w-full sm:w-auto justify-end shrink-0">
                   {isSelected ? (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onStartRace();
-                      }}
-                      data-start="true"
-                      className="w-full sm:w-auto px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold text-xs uppercase italic flex items-center justify-center gap-1.5 shadow-md shadow-red-600/30"
-                    >
-                      <Play size={14} className="fill-white" />
-                      <span>Race Here</span>
-                    </button>
+                    <>
+                      {trackGhost && !raceAgainstGhost && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onLaunchGhostRace(track);
+                          }}
+                          className="min-h-[40px] px-3 py-2 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/70 text-cyan-300 font-bold text-xs uppercase italic flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+                        >
+                          <Ghost size={14} />
+                          <span>Race Ghost</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onStartRace();
+                        }}
+                        data-start="true"
+                        className={`flex-1 sm:flex-initial min-h-[40px] px-4 py-2 rounded-lg text-white font-bold text-xs uppercase italic flex items-center justify-center gap-1.5 shadow-md cursor-pointer whitespace-nowrap ${
+                          raceAgainstGhost
+                            ? 'bg-cyan-600 hover:bg-cyan-500 shadow-cyan-600/30'
+                            : 'bg-red-600 hover:bg-red-500 shadow-red-600/30'
+                        }`}
+                      >
+                        {raceAgainstGhost ? <Ghost size={14} /> : <Play size={14} className="fill-white" />}
+                        <span>{raceAgainstGhost ? 'Race Ghost' : 'Race Here'}</span>
+                      </button>
+                    </>
                   ) : (
                     <span className="text-xs text-slate-500 font-mono">Select</span>
                   )}
@@ -147,20 +246,26 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-slate-800 flex items-center justify-between">
+        <div className="p-4 border-t border-slate-800 flex items-center justify-between gap-2">
           <button
+            type="button"
             onClick={onClose}
-            className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-300"
+            className="min-h-[44px] px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-300 cursor-pointer"
           >
             Back to Title
           </button>
           <button
+            type="button"
             onClick={onStartRace}
             data-start="true"
-            className="px-6 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-black italic text-xs tracking-wider uppercase flex items-center gap-2 shadow-lg shadow-red-600/30"
+            className={`min-h-[44px] px-6 py-2.5 rounded-xl text-white font-black italic text-xs tracking-wider uppercase flex items-center gap-2 shadow-lg cursor-pointer ${
+              raceAgainstGhost
+                ? 'bg-cyan-600 hover:bg-cyan-500 shadow-cyan-600/30'
+                : 'bg-red-600 hover:bg-red-500 shadow-red-600/30'
+            }`}
           >
-            <Play size={15} className="fill-white" />
-            <span>Launch Race</span>
+            {raceAgainstGhost ? <Ghost size={15} /> : <Play size={15} className="fill-white" />}
+            <span>{raceAgainstGhost ? 'Launch Ghost Race' : 'Launch Race'}</span>
           </button>
         </div>
       </div>

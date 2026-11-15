@@ -31,6 +31,10 @@ interface RaceHUDProps {
   raceMode: RaceMode;
   knockoutTimer: number;
   activeRacersCount: number;
+  ghostCar?: CarEntity | null;
+  ghostDeltaSeconds?: number | null;
+  ghostBestLapTime?: number | null;
+  isGhostDuel?: boolean;
 }
 
 export const RaceHUD: React.FC<RaceHUDProps> = ({
@@ -55,6 +59,10 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
   raceMode,
   knockoutTimer,
   activeRacersCount,
+  ghostCar = null,
+  ghostDeltaSeconds = null,
+  ghostBestLapTime = null,
+  isGhostDuel = false,
 }) => {
   const minimapCanvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -114,6 +122,17 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
       ctx.fill();
     }
 
+    if (ghostCar) {
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.35)';
+      ctx.beginPath();
+      ctx.arc(mapX(ghostCar.x), mapY(ghostCar.y), 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#38bdf8';
+      ctx.beginPath();
+      ctx.arc(mapX(ghostCar.x), mapY(ghostCar.y), 3.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     ctx.fillStyle = '#facc15';
     ctx.shadowColor = '#facc15';
     ctx.shadowBlur = 6;
@@ -121,7 +140,7 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
     ctx.arc(mapX(playerCar.x), mapY(playerCar.y), 4.5, 0, Math.PI * 2);
     ctx.fill();
     ctx.shadowBlur = 0;
-  }, [playerCar.x, playerCar.y, cars, track, baked]);
+  }, [playerCar.x, playerCar.y, cars, ghostCar, track, baked]);
 
   const speedKmh = Math.round((playerCar.speed / 400) * 220);
   const positionOrdinal =
@@ -133,8 +152,15 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
       ? '3rd'
       : `${playerCar.rank}th`;
 
-  const totalRacers = raceMode === 'knockout' ? activeRacersCount : cars.length;
-  const isDangerLast = raceMode === 'knockout' && playerCar.rank >= activeRacersCount && activeRacersCount > 1;
+  const totalRacers = isGhostDuel
+    ? ghostCar
+      ? 2
+      : 1
+    : raceMode === 'knockout'
+    ? activeRacersCount
+    : cars.length;
+  const isDangerLast =
+    !isGhostDuel && raceMode === 'knockout' && playerCar.rank >= activeRacersCount && activeRacersCount > 1;
 
   return (
     <div className="fixed inset-0 pointer-events-none z-20 flex flex-col justify-between p-3 select-none text-white">
@@ -157,11 +183,11 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
       )}
 
       {/* Top Header Stats */}
-      <div className="flex items-start justify-between w-full">
+      <div className="flex items-start justify-between gap-1.5 w-full">
         {/* Left: Position & Lap Readout */}
-        <div className="flex flex-col gap-1 pointer-events-auto">
-          <div className="flex items-baseline gap-2 bg-slate-900/85 border border-slate-700/80 rounded-2xl px-4 py-2 shadow-xl backdrop-blur-xs">
-            <span className="font-mono text-3xl font-black italic tracking-tighter text-amber-400 tabular-nums">
+        <div className="flex flex-col gap-1 pointer-events-auto shrink-0">
+          <div className="flex items-baseline gap-1.5 bg-slate-900/85 border border-slate-700/80 rounded-2xl px-3 py-1.5 shadow-xl backdrop-blur-xs whitespace-nowrap">
+            <span className="font-mono text-2xl sm:text-3xl font-black italic tracking-tighter text-amber-400 tabular-nums">
               {positionOrdinal}
             </span>
             <span className="font-mono text-xs text-slate-400 font-bold uppercase tabular-nums">
@@ -169,9 +195,11 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
             </span>
           </div>
 
-          <div className="flex items-center gap-2 px-3 py-1 bg-slate-900/80 border border-slate-800 rounded-xl text-xs font-mono font-bold text-slate-200 tabular-nums">
-            <span className="text-[11px] text-slate-400">
-              {raceMode === 'knockout' ? 'Survivor' : `Lap ${Math.min(playerCar.currentLap + 1, totalLaps)}/${totalLaps}`}
+          <div className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-900/80 border border-slate-800 rounded-xl text-[11px] font-mono font-bold text-slate-200 tabular-nums whitespace-nowrap">
+            <span className="text-slate-400">
+              {raceMode === 'knockout' && !isGhostDuel
+                ? 'Survivor'
+                : `Lap ${Math.min(playerCar.currentLap + 1, totalLaps)}/${totalLaps}`}
             </span>
             {coinsCollected > 0 && (
               <>
@@ -183,9 +211,9 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
         </div>
 
         {/* Center: Live Race Mode & Action Alerts */}
-        <div className="flex flex-col items-center gap-1.5 max-w-[180px] text-center">
+        <div className="flex flex-col items-center gap-1.5 min-w-0 max-w-[165px] text-center">
           {/* Knockout Timer Banner (only during active Knockout racing) */}
-          {countdown < 0 && raceMode === 'knockout' && activeRacersCount > 1 && (
+          {countdown < 0 && !isGhostDuel && raceMode === 'knockout' && activeRacersCount > 1 && (
             <div
               className={`px-3 py-1.5 rounded-xl text-xs font-mono font-black tracking-wide shadow-lg border tabular-nums ${
                 isDangerLast
@@ -194,6 +222,30 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
               }`}
             >
               {isDangerLast ? `LAST! KO IN ${knockoutTimer.toFixed(1)}s` : `KO IN ${knockoutTimer.toFixed(1)}s`}
+            </div>
+          )}
+
+          {/* Ghost Split Banner */}
+          {isGhostDuel && (
+            <div className="px-2.5 py-1 rounded-xl text-[11px] font-mono font-bold shadow-lg border border-cyan-500/50 bg-slate-900/90 text-cyan-200 tabular-nums whitespace-nowrap flex flex-col sm:flex-row sm:items-center sm:gap-1.5 leading-tight">
+              {ghostBestLapTime ? (
+                <>
+                  <span>Ghost {ghostBestLapTime.toFixed(2)}s</span>
+                  {ghostDeltaSeconds !== null && countdown < 0 && (
+                    <span
+                      className={`text-xs font-black ${
+                        ghostDeltaSeconds <= 0 ? 'text-emerald-400' : 'text-rose-400'
+                      }`}
+                    >
+                      {ghostDeltaSeconds <= 0
+                        ? `${ghostDeltaSeconds.toFixed(2)}s`
+                        : `+${ghostDeltaSeconds.toFixed(2)}s`}
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span>Recording Ghost</span>
+              )}
             </div>
           )}
 

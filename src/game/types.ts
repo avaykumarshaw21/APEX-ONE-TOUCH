@@ -133,6 +133,7 @@ export interface CarEntity {
   id: string;
   name: string;
   isPlayer: boolean;
+  isGhost?: boolean;
   carStats: CarStats;
 
   // Dynamic physics
@@ -259,4 +260,21 @@ export interface RaceReplayData {
   duration: number;
   carMeta: ReplayCarMeta[];
   frames: ReplayFrame[];
+}
+
+export interface GhostLapSample {
+  t: number;
+  x: number;
+  y: number;
+  angle: number;
+  speed: number;
+  steerAngle: number;
+}
+
+export interface TrackGhostLap {
+  trackId: string;
+  lapTime: number;
+  carId: string;
+  recordedAt: number;
+  samples: GhostLapSample[];
 }

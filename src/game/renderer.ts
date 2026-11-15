@@ -50,7 +50,8 @@ export class GameRenderer {
     time: number,
     weather: TrackWeather = 'clear',
     cameraZoom: CameraZoomMode = 'normal',
-    cameraOverride?: ReplayCameraState
+    cameraOverride?: ReplayCameraState,
+    ghostCar?: CarEntity | null
   ) {
     const ctx = this.ctx;
 
@@ -112,7 +113,10 @@ export class GameRenderer {
     // 5. Draw Particles (Smoke, Sparks, Mini-Turbo sparks, Flames)
     this.drawParticles(particles);
 
-    // 6. Draw Cars (Sorted by Y for visual depth)
+    // 6. Draw Cars (Ghost rendered underneath live cars so player remains crisp)
+    if (ghostCar) {
+      this.drawCar(ghostCar, time, weather);
+    }
     const sortedCars = [...cars].sort((a, b) => a.y - b.y);
     for (const car of sortedCars) {
       this.drawCar(car, time, weather);
@@ -553,7 +557,9 @@ export class GameRenderer {
   private drawCar(car: CarEntity, time: number, weather: TrackWeather = 'clear') {
     const ctx = this.ctx;
     ctx.save();
-    if (car.isEliminated) {
+    if (car.isGhost) {
+      ctx.globalAlpha = 0.48;
+    } else if (car.isEliminated) {
       ctx.globalAlpha = 0.35;
     }
     ctx.translate(car.x, car.y);
@@ -614,6 +620,11 @@ export class GameRenderer {
     ctx.beginPath();
     ctx.roundRect(-length / 2, -width / 2, length, width, 6);
     ctx.fill();
+    if (car.isGhost) {
+      ctx.strokeStyle = '#67e8f9';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
 
     // 4. Secondary Racing Stripes / Accents
     ctx.fillStyle = car.carStats.secondaryColor;
@@ -705,6 +716,11 @@ export class GameRenderer {
       ctx.textAlign = 'center';
       ctx.fillStyle = '#ffffff';
       ctx.fillText('YOU', 0, -10);
+    } else if (car.isGhost) {
+      ctx.font = 'bold 10px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#67e8f9';
+      ctx.fillText('GHOST', 0, -6);
     } else {
       ctx.font = '10px system-ui, sans-serif';
       ctx.textAlign = 'center';
