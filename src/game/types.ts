@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export type GameState = 'title' | 'level_select' | 'garage' | 'features' | 'playing' | 'paused' | 'gameover';
+export type GameState = 'title' | 'level_select' | 'garage' | 'features' | 'playing' | 'paused' | 'gameover' | 'replay';
 
 export type OpponentCount = 4 | 6 | 8;
 
@@ -212,4 +212,51 @@ export interface Particle {
   maxLife: number;
   life: number;
   type: 'smoke' | 'spark' | 'flame' | 'dust' | 'speedline' | 'turbo_spark';
+}
+
+export interface ReplayCameraState {
+  cameraX: number;
+  cameraY: number;
+  zoom: number;
+  screenShake: number;
+}
+
+export interface ReplayCarSnapshot {
+  id: string;
+  x: number;
+  y: number;
+  angle: number;
+  speed: number;
+  steerAngle: number;
+  isDrifting: boolean;
+  nitroActive: boolean;
+  miniTurboLevel: 0 | 1 | 2;
+  miniTurboBoostTimer: number;
+  isEliminated: boolean;
+  rank: number;
+  currentLap: number;
+}
+
+export interface ReplayFrame {
+  time: number;
+  camera: ReplayCameraState;
+  cars: ReplayCarSnapshot[];
+}
+
+export interface ReplayCarMeta {
+  id: string;
+  name: string;
+  isPlayer: boolean;
+  carStats: CarStats;
+  trailColor: string;
+}
+
+export interface RaceReplayData {
+  trackId: string;
+  raceMode: RaceMode;
+  weather: TrackWeather;
+  cameraZoomMode: CameraZoomMode;
+  duration: number;
+  carMeta: ReplayCarMeta[];
+  frames: ReplayFrame[];
 }

@@ -4,7 +4,15 @@
  */
 
 import { BakedTrack } from './physics';
-import { CarEntity, Particle, TrackDefinition, FloatingNotification, TrackWeather, CameraZoomMode } from './types';
+import {
+  CarEntity,
+  Particle,
+  TrackDefinition,
+  FloatingNotification,
+  TrackWeather,
+  CameraZoomMode,
+  ReplayCameraState,
+} from './types';
 
 export class GameRenderer {
   private ctx: CanvasRenderingContext2D;
@@ -12,9 +20,22 @@ export class GameRenderer {
   public cameraY: number = 0;
   public screenShake: number = 0;
   private currentZoom: number = 1.0;
+  private trackCacheKey: string | null = null;
+  private trackCacheCanvas: HTMLCanvasElement | null = null;
+  private trackCacheMinX: number = 0;
+  private trackCacheMinY: number = 0;
 
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
+  }
+
+  public getCameraState(): ReplayCameraState {
+    return {
+      cameraX: this.cameraX,
+      cameraY: this.cameraY,
+      zoom: this.currentZoom,
+      screenShake: this.screenShake,
+    };
   }
 
   public render(
@@ -28,21 +49,29 @@ export class GameRenderer {
     viewportHeight: number,
     time: number,
     weather: TrackWeather = 'clear',
-    cameraZoom: CameraZoomMode = 'normal'
+    cameraZoom: CameraZoomMode = 'normal',
+    cameraOverride?: ReplayCameraState
   ) {
     const ctx = this.ctx;
 
-    // Smooth camera zoom interpolation
-    const targetZoom = cameraZoom === 'wide' ? 0.8 : 1.0;
-    this.currentZoom += (targetZoom - this.currentZoom) * 0.1;
+    if (cameraOverride) {
+      this.cameraX = cameraOverride.cameraX;
+      this.cameraY = cameraOverride.cameraY;
+      this.currentZoom = cameraOverride.zoom > 0 ? cameraOverride.zoom : 1.0;
+      this.screenShake = cameraOverride.screenShake;
+    } else {
+      // Smooth camera zoom interpolation
+      const targetZoom = cameraZoom === 'wide' ? 0.8 : 1.0;
+      this.currentZoom += (targetZoom - this.currentZoom) * 0.1;
 
-    // Smooth camera tracking with lookahead along velocity
-    const lookaheadDist = Math.min(180, playerCar.speed * 0.35);
-    const targetCamX = playerCar.x + Math.cos(playerCar.angle) * lookaheadDist;
-    const targetCamY = playerCar.y + Math.sin(playerCar.angle) * lookaheadDist;
+      // Smooth camera tracking with lookahead along velocity
+      const lookaheadDist = Math.min(180, playerCar.speed * 0.35);
+      const targetCamX = playerCar.x + Math.cos(playerCar.angle) * lookaheadDist;
+      const targetCamY = playerCar.y + Math.sin(playerCar.angle) * lookaheadDist;
 
-    this.cameraX += (targetCamX - this.cameraX) * 0.12;
-    this.cameraY += (targetCamY - this.cameraY) * 0.12;
+      this.cameraX += (targetCamX - this.cameraX) * 0.12;
+      this.cameraY += (targetCamY - this.cameraY) * 0.12;
+    }
 
     // Screen shake decay
     let shakeX = 0;
@@ -50,7 +79,9 @@ export class GameRenderer {
     if (this.screenShake > 0.01) {
       shakeX = (Math.random() - 0.5) * this.screenShake * 16;
       shakeY = (Math.random() - 0.5) * this.screenShake * 16;
-      this.screenShake *= 0.88;
+      if (!cameraOverride) {
+        this.screenShake *= 0.88;
+      }
     }
 
     ctx.save();
@@ -63,14 +94,17 @@ export class GameRenderer {
     ctx.scale(this.currentZoom, this.currentZoom);
     ctx.translate(-this.cameraX, -this.cameraY);
 
+    const vpWorldW = viewportWidth / this.currentZoom;
+    const vpWorldH = viewportHeight / this.currentZoom;
+
     // 1. Draw Ground Texture / Grid
-    this.drawGroundDetails(track, viewportWidth / this.currentZoom, viewportHeight / this.currentZoom);
+    this.drawGroundDetails(track, vpWorldW, vpWorldH);
 
     // 2. Draw Track Asphalt & Guardrails
-    this.drawTrack(track, baked, time);
+    this.drawTrack(track, baked, vpWorldW, vpWorldH);
 
     // 3. Draw Boost Pads, Hazards & Coins
-    this.drawTrackItems(track, time);
+    this.drawTrackItems(track, time, vpWorldW, vpWorldH);
 
     // 4. Draw Persistent Skid Marks
     this.drawSkidMarks(cars);
@@ -121,10 +155,171 @@ export class GameRenderer {
     ctx.globalAlpha = 1.0;
   }
 
-  private drawTrack(track: TrackDefinition, baked: BakedTrack, time: number) {
+  private getOrBuildTrackCache(track: TrackDefinition, baked: BakedTrack) {
+    if (typeof document === 'undefined' || baked.samples.length === 0) return null;
+    const key = `${track.id}:${baked.samples.length}:${track.roadWidth}`;
+    if (this.trackCacheKey === key && this.trackCacheCanvas) {
+      return {
+        canvas: this.trackCacheCanvas,
+        minX: this.trackCacheMinX,
+        minY: this.trackCacheMinY,
+      };
+    }
+
+    const samples = baked.samples;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i < samples.length; i++) {
+      const s = samples[i];
+      if (s.x < minX) minX = s.x;
+      if (s.y < minY) minY = s.y;
+      if (s.x > maxX) maxX = s.x;
+      if (s.y > maxY) maxY = s.y;
+    }
+
+    const pad = Math.ceil(track.roadWidth / 2 + 48);
+    const originX = Math.floor(minX - pad);
+    const originY = Math.floor(minY - pad);
+    const width = Math.ceil(maxX - minX + pad * 2);
+    const height = Math.ceil(maxY - minY + pad * 2);
+
+    const offscreen = document.createElement('canvas');
+    offscreen.width = width;
+    offscreen.height = height;
+    const octx = offscreen.getContext('2d');
+    if (!octx) return null;
+
+    octx.save();
+    octx.translate(-originX, -originY);
+
+    const halfWidth = track.roadWidth / 2;
+
+    // 1. Kerb Borders
+    octx.lineWidth = track.roadWidth + 24;
+    octx.strokeStyle = track.theme.asphaltEdgeColor;
+    octx.lineCap = 'round';
+    octx.lineJoin = 'round';
+    octx.beginPath();
+    for (let i = 0; i < samples.length; i++) {
+      const s = samples[i];
+      if (i === 0) octx.moveTo(s.x, s.y);
+      else octx.lineTo(s.x, s.y);
+    }
+    octx.closePath();
+    octx.stroke();
+
+    // 2. Asphalt Surface
+    octx.lineWidth = track.roadWidth;
+    octx.strokeStyle = track.theme.asphaltColor;
+    octx.beginPath();
+    for (let i = 0; i < samples.length; i++) {
+      const s = samples[i];
+      if (i === 0) octx.moveTo(s.x, s.y);
+      else octx.lineTo(s.x, s.y);
+    }
+    octx.closePath();
+    octx.stroke();
+
+    // 3. Alternating Kerb Stripes
+    const kerbSegmentLen = 6;
+    for (let i = 0; i < samples.length; i += kerbSegmentLen) {
+      const s1 = samples[i];
+      const color = Math.floor(i / kerbSegmentLen) % 2 === 0 ? track.theme.kerbColor1 : track.theme.kerbColor2;
+      octx.fillStyle = color;
+
+      octx.beginPath();
+      octx.arc(s1.x + s1.nx * halfWidth, s1.y + s1.ny * halfWidth, 6, 0, Math.PI * 2);
+      octx.fill();
+
+      octx.beginPath();
+      octx.arc(s1.x - s1.nx * halfWidth, s1.y - s1.ny * halfWidth, 6, 0, Math.PI * 2);
+      octx.fill();
+    }
+
+    // 4. Center Dash Lines
+    octx.lineWidth = 4;
+    octx.strokeStyle = track.id === 'neon_metropolis' ? '#00f0ff' : '#facc15';
+    octx.globalAlpha = 0.55;
+    octx.setLineDash([20, 24]);
+    octx.beginPath();
+    for (let i = 0; i < samples.length; i++) {
+      const s = samples[i];
+      if (i === 0) octx.moveTo(s.x, s.y);
+      else octx.lineTo(s.x, s.y);
+    }
+    octx.closePath();
+    octx.stroke();
+    octx.setLineDash([]);
+    octx.globalAlpha = 1.0;
+
+    // 5. Start / Finish Line Banner
+    const startSample = samples[0];
+    octx.save();
+    octx.translate(startSample.x, startSample.y);
+    octx.rotate(startSample.angle + Math.PI / 2);
+    const bannerWidth = track.roadWidth - 10;
+    const checkSize = 14;
+    const halfChecks = Math.floor(bannerWidth / (checkSize * 2));
+    for (let c = -halfChecks; c < halfChecks; c++) {
+      for (let r = -1; r <= 1; r++) {
+        octx.fillStyle = Math.abs(c + r) % 2 === 0 ? '#ffffff' : '#000000';
+        octx.fillRect(c * checkSize, r * checkSize, checkSize, checkSize);
+      }
+    }
+    octx.restore();
+    octx.restore();
+
+    this.trackCacheKey = key;
+    this.trackCacheCanvas = offscreen;
+    this.trackCacheMinX = originX;
+    this.trackCacheMinY = originY;
+
+    return {
+      canvas: offscreen,
+      minX: originX,
+      minY: originY,
+    };
+  }
+
+  private drawTrack(track: TrackDefinition, baked: BakedTrack, vpW: number, vpH: number) {
     const ctx = this.ctx;
+    const cached = this.getOrBuildTrackCache(track, baked);
+    if (cached) {
+      const margin = 40;
+      const viewLeft = this.cameraX - vpW * 0.5 - margin;
+      const viewTop = this.cameraY - vpH * 0.5 - margin;
+      const viewRight = this.cameraX + vpW * 0.5 + margin;
+      const viewBottom = this.cameraY + vpH * 0.5 + margin;
+
+      const sx = Math.max(0, Math.floor(viewLeft - cached.minX));
+      const sy = Math.max(0, Math.floor(viewTop - cached.minY));
+      const ex = Math.min(cached.canvas.width, Math.ceil(viewRight - cached.minX));
+      const ey = Math.min(cached.canvas.height, Math.ceil(viewBottom - cached.minY));
+      const sw = ex - sx;
+      const sh = ey - sy;
+
+      if (sw > 0 && sh > 0) {
+        ctx.drawImage(
+          cached.canvas,
+          sx,
+          sy,
+          sw,
+          sh,
+          cached.minX + sx,
+          cached.minY + sy,
+          sw,
+          sh
+        );
+      }
+      return;
+    }
+
     const samples = baked.samples;
     const halfWidth = track.roadWidth / 2;
+    const cullHalfW = vpW * 0.5 + 120;
+    const cullHalfH = vpH * 0.5 + 120;
 
     // Draw Kerb Borders (Outer and Inner colored strips)
     ctx.lineWidth = track.roadWidth + 24;
@@ -152,11 +347,16 @@ export class GameRenderer {
     ctx.closePath();
     ctx.stroke();
 
-    // Draw Alternating Kerb Stripes along outer edges
+    // Draw Alternating Kerb Stripes along outer edges (culled to visible viewport)
     const kerbSegmentLen = 6;
     for (let i = 0; i < samples.length; i += kerbSegmentLen) {
       const s1 = samples[i];
-      const s2 = samples[(i + kerbSegmentLen / 2) % samples.length];
+      if (
+        Math.abs(s1.x - this.cameraX) > cullHalfW ||
+        Math.abs(s1.y - this.cameraY) > cullHalfH
+      ) {
+        continue;
+      }
       const color = Math.floor(i / kerbSegmentLen) % 2 === 0 ? track.theme.kerbColor1 : track.theme.kerbColor2;
 
       ctx.fillStyle = color;
@@ -196,35 +396,39 @@ export class GameRenderer {
     // Checkered Banner
     const bannerWidth = track.roadWidth - 10;
     const checkSize = 14;
-    const checks = Math.floor(bannerWidth / checkSize);
-    for (let c = -checks / 2; c < checks / 2; c++) {
+    const halfChecks = Math.floor(bannerWidth / (checkSize * 2));
+    for (let c = -halfChecks; c < halfChecks; c++) {
       for (let r = -1; r <= 1; r++) {
-        ctx.fillStyle = (c + r) % 2 === 0 ? '#ffffff' : '#000000';
+        ctx.fillStyle = Math.abs(c + r) % 2 === 0 ? '#ffffff' : '#000000';
         ctx.fillRect(c * checkSize, r * checkSize, checkSize, checkSize);
       }
     }
     ctx.restore();
   }
 
-  private drawTrackItems(track: TrackDefinition, time: number) {
+  private drawTrackItems(track: TrackDefinition, time: number, vpW: number, vpH: number) {
     const ctx = this.ctx;
+    const cullHalfW = vpW * 0.5 + 100;
+    const cullHalfH = vpH * 0.5 + 100;
 
     // 1. Boost Pads
     for (const pad of track.boostPads) {
+      if (
+        Math.abs(pad.x - this.cameraX) > cullHalfW ||
+        Math.abs(pad.y - this.cameraY) > cullHalfH
+      ) {
+        continue;
+      }
       ctx.save();
       ctx.translate(pad.x, pad.y);
       ctx.rotate(pad.angle);
 
-      // Glowing pad backdrop
       const pulse = 0.7 + Math.sin(time * 8) * 0.3;
       ctx.fillStyle = `rgba(6, 182, 212, ${0.35 * pulse})`;
       ctx.fillRect(-pad.length / 2, -pad.width / 2, pad.length, pad.width);
 
-      // Glowing Chevrons pointing forward
       ctx.strokeStyle = '#00f0ff';
       ctx.lineWidth = 5;
-      ctx.shadowColor = '#00f0ff';
-      ctx.shadowBlur = 12;
 
       for (let offset = -18; offset <= 18; offset += 18) {
         ctx.beginPath();
@@ -238,16 +442,20 @@ export class GameRenderer {
 
     // 2. Hazards (Oil slick, Cones)
     for (const h of track.hazards) {
+      if (
+        Math.abs(h.x - this.cameraX) > cullHalfW ||
+        Math.abs(h.y - this.cameraY) > cullHalfH
+      ) {
+        continue;
+      }
       ctx.save();
       ctx.translate(h.x, h.y);
       if (h.type === 'oil') {
-        // Glistening oil puddle
         ctx.fillStyle = '#0f172a';
         ctx.beginPath();
         ctx.ellipse(0, 0, h.radius * 1.2, h.radius * 0.8, 0.4, 0, Math.PI * 2);
         ctx.fill();
 
-        // Rainbow oil sheen
         ctx.strokeStyle = '#a855f7';
         ctx.lineWidth = 3;
         ctx.globalAlpha = 0.6;
@@ -255,7 +463,6 @@ export class GameRenderer {
         ctx.ellipse(2, -1, h.radius * 0.7, h.radius * 0.4, 0.4, 0, Math.PI * 2);
         ctx.stroke();
       } else if (h.type === 'cone') {
-        // Traffic Cone
         ctx.fillStyle = '#f97316';
         ctx.beginPath();
         ctx.arc(0, 0, h.radius, 0, Math.PI * 2);
@@ -265,7 +472,6 @@ export class GameRenderer {
         ctx.arc(0, 0, h.radius * 0.5, 0, Math.PI * 2);
         ctx.fill();
       } else {
-        // Barrier
         ctx.fillStyle = '#ef4444';
         ctx.fillRect(-h.radius, -10, h.radius * 2, 20);
         ctx.fillStyle = '#ffffff';
@@ -277,28 +483,34 @@ export class GameRenderer {
     // 3. Coins
     for (const coin of track.coins) {
       if (coin.collected) continue;
+      if (
+        Math.abs(coin.x - this.cameraX) > cullHalfW ||
+        Math.abs(coin.y - this.cameraY) > cullHalfH
+      ) {
+        continue;
+      }
       ctx.save();
       ctx.translate(coin.x, coin.y);
 
-      // Wobble / spin animation
       const scaleX = Math.cos(time * 4);
       ctx.scale(Math.abs(scaleX) * 0.7 + 0.3, 1.0);
 
-      // Coin outer gold rim
+      // Soft additive halo (fast, no shadowBlur)
+      ctx.fillStyle = 'rgba(250, 204, 21, 0.25)';
+      ctx.beginPath();
+      ctx.arc(0, 0, 19, 0, Math.PI * 2);
+      ctx.fill();
+
       ctx.fillStyle = '#eab308';
-      ctx.shadowColor = '#facc15';
-      ctx.shadowBlur = 10;
       ctx.beginPath();
       ctx.arc(0, 0, 14, 0, Math.PI * 2);
       ctx.fill();
 
-      // Coin inner core
       ctx.fillStyle = '#fef08a';
       ctx.beginPath();
       ctx.arc(0, 0, 9, 0, Math.PI * 2);
       ctx.fill();
 
-      // Star / Dollar symbol
       ctx.fillStyle = '#ca8a04';
       ctx.fillRect(-2, -5, 4, 10);
       ctx.restore();
@@ -331,12 +543,6 @@ export class GameRenderer {
       ctx.save();
       ctx.globalAlpha = p.alpha;
       ctx.fillStyle = p.color;
-
-      if (p.type === 'flame') {
-        ctx.shadowColor = p.color;
-        ctx.shadowBlur = 10;
-      }
-
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
       ctx.fill();
@@ -441,11 +647,8 @@ export class GameRenderer {
     // 8. Taillights (Red glow, flares bright on drift)
     const isBrakingOrDrifting = car.isDrifting || car.speed < 100;
     ctx.fillStyle = isBrakingOrDrifting ? '#ef4444' : '#991b1b';
-    ctx.shadowColor = '#ef4444';
-    ctx.shadowBlur = isBrakingOrDrifting ? 12 : 3;
     ctx.fillRect(-length / 2 - 1, -width / 2 + 3, 3, 4);
     ctx.fillRect(-length / 2 - 1, width / 2 - 7, 3, 4);
-    ctx.shadowBlur = 0;
 
     // 9. Nitro & Mini-Turbo Exhaust Flames
     const isTurboActive = car.nitroActive || car.miniTurboBoostTimer > 0;
@@ -453,12 +656,8 @@ export class GameRenderer {
       const isUltra = car.miniTurboBoostTimer > 0 && car.miniTurboLevel === 2;
       const flameLen = 16 + Math.sin(time * 45) * 10;
       const flameColor = isUltra ? '#c084fc' : car.miniTurboBoostTimer > 0 ? '#38bdf8' : '#00f0ff';
-      const glowColor = isUltra ? '#a855f7' : '#06b6d4';
 
       ctx.fillStyle = flameColor;
-      ctx.shadowColor = glowColor;
-      ctx.shadowBlur = 16;
-
       ctx.beginPath();
       ctx.moveTo(-length / 2 - 2, -6);
       ctx.lineTo(-length / 2 - 2 - flameLen, -3);
@@ -470,15 +669,12 @@ export class GameRenderer {
       ctx.lineTo(-length / 2 - 2 - flameLen, 3);
       ctx.lineTo(-length / 2 - 2, 6);
       ctx.fill();
-      ctx.shadowBlur = 0;
     }
 
-    // 10. Mini-Turbo Drift Sparks at Rear Tires (Asphalt / Mario Kart style)
+    // 10. Mini-Turbo Drift Sparks at Rear Tires
     if (car.isDrifting && car.miniTurboLevel > 0) {
       const sparkColor = car.miniTurboLevel === 2 ? '#d946ef' : '#06b6d4';
       ctx.fillStyle = sparkColor;
-      ctx.shadowColor = sparkColor;
-      ctx.shadowBlur = 12;
 
       for (let s = 0; s < 3; s++) {
         const ox = (Math.random() - 0.5) * 12;
@@ -488,7 +684,6 @@ export class GameRenderer {
         ctx.arc(-length / 2 + 6 + ox, width / 2 + 4 + oy, 3, 0, Math.PI * 2);
         ctx.fill();
       }
-      ctx.shadowBlur = 0;
     }
 
     ctx.restore();
@@ -498,10 +693,7 @@ export class GameRenderer {
     ctx.translate(car.x, car.y - 28);
 
     if (car.isPlayer) {
-      // Player Indicator Badge
       ctx.fillStyle = '#facc15';
-      ctx.shadowColor = '#facc15';
-      ctx.shadowBlur = 8;
       ctx.beginPath();
       ctx.moveTo(-6, -6);
       ctx.lineTo(6, -6);
@@ -514,13 +706,11 @@ export class GameRenderer {
       ctx.fillStyle = '#ffffff';
       ctx.fillText('YOU', 0, -10);
     } else {
-      // AI Name Tag
       ctx.font = '10px system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
       ctx.fillText(car.name, 0, -4);
 
-      // AI Rival Reaction Emote (when overtaken)
       if (car.aiEmote && car.aiEmote.timer > 0) {
         ctx.save();
         ctx.translate(0, -22);
@@ -552,15 +742,11 @@ export class GameRenderer {
       ctx.font = '900 15px system-ui, sans-serif';
       ctx.textAlign = 'center';
 
-      // Dark stroke outline
       ctx.strokeStyle = '#090a0f';
       ctx.lineWidth = 4;
       ctx.strokeText(notif.text, 0, 0);
 
-      // Bright fill text with glow
       ctx.fillStyle = notif.color;
-      ctx.shadowColor = notif.color;
-      ctx.shadowBlur = 10;
       ctx.fillText(notif.text, 0, 0);
 
       if (notif.subtext) {

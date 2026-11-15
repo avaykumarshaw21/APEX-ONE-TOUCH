@@ -12,6 +12,7 @@ import { RaceResultModal } from './components/RaceResultModal';
 import { PauseModal } from './components/PauseModal';
 import { FeaturesMenuModal } from './components/FeaturesMenuModal';
 import { OfflineIndicator } from './components/PWAControls';
+import { ReplayHUD, ReplayCameraMode, ReplayPlaybackSpeed } from './components/ReplayHUD';
 import { TRACKS, CARS, AI_RIVALS_POOL } from './game/tracks';
 import {
   GameState,
@@ -26,6 +27,7 @@ import {
   RacePerkId,
   TrackWeather,
   CameraZoomMode,
+  RaceReplayData,
 } from './game/types';
 import {
   bakeTrack,
@@ -47,6 +49,11 @@ import {
   rotateClaimedMission,
   findKnockoutEliminationTarget,
 } from './game/features';
+import {
+  createReplayRecorder,
+  recordReplayFrame,
+  sampleReplayAtTime,
+} from './game/replay';
 import { GameRenderer } from './game/renderer';
 import { sound } from './game/audio';
 
@@ -128,6 +135,47 @@ export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<GameRenderer | null>(null);
   const bakedTrackRef = useRef<BakedTrack>(bakeTrack(TRACKS[0].points));
+
+  // Race Replay Recording & Playback State
+  const replayDataRef = useRef<RaceReplayData | null>(null);
+  const [savedReplay, setSavedReplay] = useState<RaceReplayData | null>(null);
+  const kickReplayLoopRef = useRef<(() => void) | null>(null);
+  const replayPlaybackRef = useRef<{
+    time: number;
+    paused: boolean;
+    speed: ReplayPlaybackSpeed;
+    cameraMode: ReplayCameraMode;
+    focusCarIndex: number;
+    dirty: boolean;
+  }>({
+    time: 0,
+    paused: false,
+    speed: 1,
+    cameraMode: 'saved',
+    focusCarIndex: 0,
+    dirty: true,
+  });
+  const [replayHud, setReplayHud] = useState<{
+    currentTime: number;
+    duration: number;
+    isPaused: boolean;
+    playbackSpeed: ReplayPlaybackSpeed;
+    cameraMode: ReplayCameraMode;
+    focusedCarName: string;
+    focusedCarRank: number;
+    focusedCarSpeed: number;
+    totalCars: number;
+  }>({
+    currentTime: 0,
+    duration: 0,
+    isPaused: false,
+    playbackSpeed: 1,
+    cameraMode: 'saved',
+    focusedCarName: 'YOU',
+    focusedCarRank: 1,
+    focusedCarSpeed: 0,
+    totalCars: 5,
+  });
 
   // Mutable Game Simulation State (Runs at 60 FPS without triggering React re-renders)
   const simState = useRef<{
@@ -372,13 +420,32 @@ export default function App() {
     if (rendererRef.current) {
       rendererRef.current.cameraX = playerEntity.x;
       rendererRef.current.cameraY = playerEntity.y;
+      rendererRef.current.screenShake = 0;
     }
+
+    const recorder = createReplayRecorder(track, raceMode, weather, cameraZoom, createdCars);
+    recordReplayFrame(
+      recorder,
+      0,
+      createdCars,
+      rendererRef.current
+        ? rendererRef.current.getCameraState()
+        : {
+            cameraX: playerEntity.x,
+            cameraY: playerEntity.y,
+            zoom: cameraZoom === 'wide' ? 0.8 : 1.0,
+            screenShake: 0,
+          },
+      { force: true }
+    );
+    replayDataRef.current = recorder;
   };
 
   // Start Race
   const startRace = () => {
     sound.resume();
     sound.startEngine();
+    setSavedReplay(null);
     initializeGrid(selectedTrack, opponentCount);
     setGameState('playing');
   };
@@ -401,6 +468,7 @@ export default function App() {
       if (e.code === 'KeyP' || e.code === 'Escape') {
         if (gameState === 'playing') setGameState('paused');
         else if (gameState === 'paused') setGameState('playing');
+        else if (gameState === 'replay' && e.code === 'Escape') setGameState('gameover');
         return;
       }
 
@@ -408,6 +476,22 @@ export default function App() {
         const nextMute = sound.toggleMute();
         setIsMuted(nextMute);
         return;
+      }
+
+      if (gameState === 'replay') {
+        if (e.code === 'Space') {
+          e.preventDefault();
+          toggleReplayPlay();
+          return;
+        }
+        if (e.code === 'ArrowLeft') {
+          seekReplay(replayPlaybackRef.current.time - 2);
+          return;
+        }
+        if (e.code === 'ArrowRight') {
+          seekReplay(replayPlaybackRef.current.time + 2);
+          return;
+        }
       }
 
       if (gameState === 'playing') {
@@ -448,7 +532,7 @@ export default function App() {
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleBlur);
     };
-  }, [gameState, selectedTrack, opponentCount, progress.equippedPerk]);
+  }, [gameState, selectedTrack, opponentCount, progress.equippedPerk, savedReplay]);
 
   // Nitro Trigger
   const triggerNitro = () => {
@@ -462,15 +546,35 @@ export default function App() {
     }
   };
 
-  // Main 60 FPS Game Loop
+  // Main 60 FPS Game Loop (active only during live racing or unpaused replay)
   useEffect(() => {
-    let animId: number;
+    let animId = 0;
+    let isScheduled = false;
     let lastTime = performance.now();
     let hudThrottleTimer = 0;
     let staticNeedsRender = true;
 
+    const requestFrame = () => {
+      if (!isScheduled) {
+        isScheduled = true;
+        animId = requestAnimationFrame(gameLoop);
+      }
+    };
+
+    const handleResize = () => {
+      staticNeedsRender = true;
+      requestFrame();
+    };
+    window.addEventListener('resize', handleResize);
+
+    kickReplayLoopRef.current = () => {
+      lastTime = performance.now();
+      staticNeedsRender = true;
+      requestFrame();
+    };
+
     const gameLoop = (now: number) => {
-      animId = requestAnimationFrame(gameLoop);
+      isScheduled = false;
 
       const rawDt = (now - lastTime) / 1000;
       lastTime = now;
@@ -493,6 +597,66 @@ export default function App() {
       if (!rendererRef.current) {
         rendererRef.current = new GameRenderer(ctx);
         staticNeedsRender = true;
+      }
+
+      if (gameState === 'replay' && savedReplay) {
+        const pb = replayPlaybackRef.current;
+        if (!pb.paused) {
+          pb.time += dt * pb.speed;
+          if (pb.time >= savedReplay.duration) {
+            pb.time = savedReplay.duration;
+            pb.paused = true;
+          }
+          pb.dirty = true;
+        }
+
+        if (pb.dirty || staticNeedsRender) {
+          pb.dirty = false;
+          staticNeedsRender = false;
+          const sampled = sampleReplayAtTime(savedReplay, pb.time);
+          if (sampled && sampled.cars.length > 0) {
+            const safeIdx = Math.max(0, Math.min(sampled.cars.length - 1, pb.focusCarIndex));
+            const focusCar = sampled.cars[safeIdx];
+            const replayTrack = TRACKS.find((t) => t.id === savedReplay.trackId) || selectedTrack;
+            const baked = bakedTrackRef.current;
+
+            rendererRef.current.render(
+              replayTrack,
+              baked,
+              sampled.cars,
+              focusCar,
+              [],
+              [],
+              width,
+              height,
+              sampled.time,
+              savedReplay.weather,
+              savedReplay.cameraZoomMode,
+              pb.cameraMode === 'saved' ? sampled.camera : undefined
+            );
+
+            hudThrottleTimer += dt;
+            if (hudThrottleTimer >= 0.05 || pb.paused) {
+              hudThrottleTimer = 0;
+              setReplayHud({
+                currentTime: sampled.time,
+                duration: savedReplay.duration,
+                isPaused: pb.paused,
+                playbackSpeed: pb.speed,
+                cameraMode: pb.cameraMode,
+                focusedCarName: focusCar.name,
+                focusedCarRank: focusCar.rank,
+                focusedCarSpeed: focusCar.speed,
+                totalCars: sampled.cars.length,
+              });
+            }
+          }
+        }
+
+        if (!pb.paused) {
+          requestFrame();
+        }
+        return;
       }
 
       if (gameState === 'playing') {
@@ -525,6 +689,16 @@ export default function App() {
         cameraZoom
       );
 
+      if (gameState === 'playing' && replayDataRef.current && !simState.current.isRaceFinished) {
+        const elapsed = Math.max(0, (now - simState.current.raceStartTime) / 1000);
+        recordReplayFrame(
+          replayDataRef.current,
+          elapsed,
+          simState.current.cars,
+          rendererRef.current.getCameraState()
+        );
+      }
+
       hudThrottleTimer += dt;
       if (gameState === 'playing' && hudThrottleTimer >= 0.06 && simState.current.playerCar) {
         hudThrottleTimer = 0;
@@ -552,11 +726,19 @@ export default function App() {
           activeRacersCount,
         });
       }
+
+      if (gameState === 'playing') {
+        requestFrame();
+      }
     };
 
-    animId = requestAnimationFrame(gameLoop);
-    return () => cancelAnimationFrame(animId);
-  }, [gameState, selectedTrack, weather, cameraZoom, raceMode, autoDriftAssist, steeringSensitivity, progress.equippedPerk]);
+    requestFrame();
+    return () => {
+      cancelAnimationFrame(animId);
+      window.removeEventListener('resize', handleResize);
+      kickReplayLoopRef.current = null;
+    };
+  }, [gameState, selectedTrack, weather, cameraZoom, raceMode, autoDriftAssist, steeringSensitivity, progress.equippedPerk, savedReplay]);
 
   // Helper to spawn floating world notification text
   const spawnNotification = (text: string, x: number, y: number, color: string, subtext?: string) => {
@@ -1105,7 +1287,140 @@ export default function App() {
       };
     });
 
+    if (replayDataRef.current) {
+      const elapsed = Math.max(0, (performance.now() - simState.current.raceStartTime) / 1000);
+      const camState = rendererRef.current
+        ? rendererRef.current.getCameraState()
+        : {
+            cameraX: player.x,
+            cameraY: player.y,
+            zoom: cameraZoom === 'wide' ? 0.8 : 1.0,
+            screenShake: 0,
+          };
+      recordReplayFrame(replayDataRef.current, elapsed, simState.current.cars, camState, {
+        force: true,
+      });
+      setSavedReplay({
+        ...replayDataRef.current,
+        frames: [...replayDataRef.current.frames],
+      });
+    }
+
     setGameState('gameover');
+  };
+
+  // Replay Transport Handlers
+  const handleWatchReplay = () => {
+    if (!savedReplay || savedReplay.frames.length === 0) return;
+    const firstSample = sampleReplayAtTime(savedReplay, 0);
+    const firstCar = firstSample?.cars[0];
+    replayPlaybackRef.current = {
+      time: 0,
+      paused: false,
+      speed: 1,
+      cameraMode: 'saved',
+      focusCarIndex: 0,
+      dirty: true,
+    };
+    setReplayHud({
+      currentTime: 0,
+      duration: savedReplay.duration,
+      isPaused: false,
+      playbackSpeed: 1,
+      cameraMode: 'saved',
+      focusedCarName: firstCar?.name || 'YOU',
+      focusedCarRank: firstCar?.rank || 1,
+      focusedCarSpeed: firstCar?.speed || 0,
+      totalCars: savedReplay.carMeta.length,
+    });
+    setGameState('replay');
+  };
+
+  const toggleReplayPlay = () => {
+    if (!savedReplay) return;
+    const pb = replayPlaybackRef.current;
+    if (pb.paused && pb.time >= savedReplay.duration - 0.05) {
+      pb.time = 0;
+    }
+    pb.paused = !pb.paused;
+    pb.dirty = true;
+    setReplayHud((prev) => ({ ...prev, isPaused: pb.paused, currentTime: pb.time }));
+    kickReplayLoopRef.current?.();
+  };
+
+  const restartReplay = () => {
+    replayPlaybackRef.current.time = 0;
+    replayPlaybackRef.current.paused = false;
+    replayPlaybackRef.current.dirty = true;
+    setReplayHud((prev) => ({ ...prev, currentTime: 0, isPaused: false }));
+    kickReplayLoopRef.current?.();
+  };
+
+  const seekReplay = (nextTime: number) => {
+    if (!savedReplay) return;
+    const clamped = Math.max(0, Math.min(savedReplay.duration, nextTime));
+    replayPlaybackRef.current.time = clamped;
+    replayPlaybackRef.current.dirty = true;
+    const sampled = sampleReplayAtTime(savedReplay, clamped);
+    const focusCar = sampled?.cars[replayPlaybackRef.current.focusCarIndex];
+    if (
+      focusCar &&
+      rendererRef.current &&
+      replayPlaybackRef.current.cameraMode === 'follow' &&
+      replayPlaybackRef.current.paused
+    ) {
+      rendererRef.current.cameraX = focusCar.x;
+      rendererRef.current.cameraY = focusCar.y;
+    }
+    setReplayHud((prev) => ({
+      ...prev,
+      currentTime: clamped,
+      focusedCarRank: focusCar?.rank ?? prev.focusedCarRank,
+      focusedCarSpeed: focusCar?.speed ?? prev.focusedCarSpeed,
+    }));
+    kickReplayLoopRef.current?.();
+  };
+
+  const cycleReplaySpeed = () => {
+    const speeds: ReplayPlaybackSpeed[] = [0.5, 1, 2];
+    const currentIdx = speeds.indexOf(replayPlaybackRef.current.speed);
+    const nextSpeed = speeds[(currentIdx + 1) % speeds.length];
+    replayPlaybackRef.current.speed = nextSpeed;
+    replayPlaybackRef.current.dirty = true;
+    setReplayHud((prev) => ({ ...prev, playbackSpeed: nextSpeed }));
+    kickReplayLoopRef.current?.();
+  };
+
+  const toggleReplayCameraMode = () => {
+    const nextMode: ReplayCameraMode =
+      replayPlaybackRef.current.cameraMode === 'saved' ? 'follow' : 'saved';
+    replayPlaybackRef.current.cameraMode = nextMode;
+    replayPlaybackRef.current.dirty = true;
+    setReplayHud((prev) => ({ ...prev, cameraMode: nextMode }));
+    kickReplayLoopRef.current?.();
+  };
+
+  const cycleReplayCar = (delta: number) => {
+    if (!savedReplay || savedReplay.carMeta.length === 0) return;
+    const count = savedReplay.carMeta.length;
+    const nextIndex = (replayPlaybackRef.current.focusCarIndex + delta + count) % count;
+    replayPlaybackRef.current.focusCarIndex = nextIndex;
+    replayPlaybackRef.current.cameraMode = 'follow';
+    replayPlaybackRef.current.dirty = true;
+    const sampled = sampleReplayAtTime(savedReplay, replayPlaybackRef.current.time);
+    const focusCar = sampled?.cars[nextIndex];
+    if (focusCar && rendererRef.current && replayPlaybackRef.current.paused) {
+      rendererRef.current.cameraX = focusCar.x;
+      rendererRef.current.cameraY = focusCar.y;
+    }
+    setReplayHud((prev) => ({
+      ...prev,
+      cameraMode: 'follow',
+      focusedCarName: focusCar?.name || savedReplay.carMeta[nextIndex].name,
+      focusedCarRank: focusCar?.rank || 1,
+      focusedCarSpeed: focusCar?.speed || 0,
+    }));
+    kickReplayLoopRef.current?.();
   };
 
   // 1-Finger Touch and Pointer Event Handlers
@@ -1343,14 +1658,40 @@ export default function App() {
           track={selectedTrack}
           raceMode={raceMode}
           coinsEarned={lastRacePrize}
+          hasReplay={!!savedReplay && savedReplay.frames.length > 1}
+          onWatchReplay={handleWatchReplay}
           onRestartRace={startRace}
           onNextTrack={handleNextTrack}
           onReturnToMenu={() => setGameState('title')}
         />
       )}
 
+      {/* Race Replay Playback HUD */}
+      {gameState === 'replay' && savedReplay && (
+        <ReplayHUD
+          trackName={TRACKS.find((t) => t.id === savedReplay.trackId)?.name || selectedTrack.name}
+          currentTime={replayHud.currentTime}
+          duration={replayHud.duration}
+          isPaused={replayHud.isPaused}
+          playbackSpeed={replayHud.playbackSpeed}
+          cameraMode={replayHud.cameraMode}
+          focusedCarName={replayHud.focusedCarName}
+          focusedCarRank={replayHud.focusedCarRank}
+          focusedCarSpeed={replayHud.focusedCarSpeed}
+          totalCars={replayHud.totalCars}
+          onTogglePlay={toggleReplayPlay}
+          onRestart={restartReplay}
+          onSeek={seekReplay}
+          onCycleSpeed={cycleReplaySpeed}
+          onToggleCameraMode={toggleReplayCameraMode}
+          onPrevCar={() => cycleReplayCar(-1)}
+          onNextCar={() => cycleReplayCar(1)}
+          onExit={() => setGameState('gameover')}
+        />
+      )}
+
       {/* Offline Connectivity Indicator (hidden when online) */}
-      <OfflineIndicator isPlaying={gameState === 'playing'} />
+      <OfflineIndicator isPlaying={gameState === 'playing' || gameState === 'replay'} />
     </div>
   );
 }

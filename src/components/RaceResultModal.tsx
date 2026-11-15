@@ -4,7 +4,7 @@
  */
 
 import React from 'react';
-import { Trophy, Award, RotateCcw, ArrowRight, Zap, Coins } from 'lucide-react';
+import { Trophy, RotateCcw, ArrowRight, Film } from 'lucide-react';
 import { CarEntity, RaceMode, TrackDefinition } from '../game/types';
 
 interface RaceResultModalProps {
@@ -13,6 +13,8 @@ interface RaceResultModalProps {
   track: TrackDefinition;
   raceMode: RaceMode;
   coinsEarned: number;
+  hasReplay?: boolean;
+  onWatchReplay?: () => void;
   onRestartRace: () => void;
   onNextTrack: () => void;
   onReturnToMenu: () => void;
@@ -24,6 +26,8 @@ export const RaceResultModal: React.FC<RaceResultModalProps> = ({
   track,
   raceMode,
   coinsEarned,
+  hasReplay = false,
+  onWatchReplay,
   onRestartRace,
   onNextTrack,
   onReturnToMenu,
@@ -35,7 +39,7 @@ export const RaceResultModal: React.FC<RaceResultModalProps> = ({
   const sortedCars = [...cars].sort((a, b) => a.rank - b.rank);
 
   return (
-    <div className="fixed inset-0 z-40 bg-slate-950/92 backdrop-blur-md flex items-center justify-center p-3 select-none text-white">
+    <div className="fixed inset-0 z-40 bg-slate-950/95 flex items-center justify-center p-3 select-none text-white">
       <div className="w-full max-w-lg bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden">
         {/* Banner */}
         <div
@@ -142,7 +146,7 @@ export const RaceResultModal: React.FC<RaceResultModalProps> = ({
                     style={{ backgroundColor: car.carStats.primaryColor }}
                   />
                   <span className={isSelf ? 'text-amber-300 font-black' : 'text-slate-200'}>
-                    {car.name} {isSelf && '(YOU)'}
+                    {isSelf && car.name === 'YOU' ? 'YOU' : isSelf ? `${car.name} (YOU)` : car.name}
                   </span>
                 </div>
 
@@ -160,28 +164,44 @@ export const RaceResultModal: React.FC<RaceResultModalProps> = ({
         </div>
 
         {/* Action Buttons */}
-        <div className="p-4 border-t border-slate-800 flex items-center gap-2 bg-slate-950/80">
-          <button
-            onClick={onReturnToMenu}
-            className="flex-1 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-300 transition-all flex items-center justify-center gap-1.5"
-          >
-            Menu
-          </button>
-          <button
-            onClick={onRestartRace}
-            className="flex-1 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-300 transition-all flex items-center justify-center gap-1.5"
-          >
-            <RotateCcw size={14} />
-            <span>Retry</span>
-          </button>
-          <button
-            data-start="true"
-            onClick={onNextTrack}
-            className="flex-2 py-3 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-black italic text-xs uppercase tracking-wider shadow-lg shadow-red-600/30 transition-all flex items-center justify-center gap-2"
-          >
-            <span>Next Race</span>
-            <ArrowRight size={15} />
-          </button>
+        <div className="p-4 border-t border-slate-800 flex flex-col gap-2 bg-slate-950/80">
+          {hasReplay && onWatchReplay && (
+            <button
+              type="button"
+              onClick={onWatchReplay}
+              className="w-full min-h-[44px] py-2.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/60 text-cyan-300 font-black italic text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <Film size={15} />
+              <span>Watch Race Replay</span>
+            </button>
+          )}
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onReturnToMenu}
+              className="flex-1 min-h-[44px] py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-300 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              Menu
+            </button>
+            <button
+              type="button"
+              onClick={onRestartRace}
+              className="flex-1 min-h-[44px] py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-300 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <RotateCcw size={14} />
+              <span>Retry</span>
+            </button>
+            <button
+              type="button"
+              data-start="true"
+              onClick={onNextTrack}
+              className="flex-2 min-h-[44px] py-3 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-black italic text-xs uppercase tracking-wider shadow-lg shadow-red-600/30 transition-all flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <span>Next Race</span>
+              <ArrowRight size={15} />
+            </button>
+          </div>
         </div>
       </div>
     </div>
