@@ -15,6 +15,7 @@ import {
   Target,
   Flame,
   Gift,
+  Download,
 } from 'lucide-react';
 import {
   AIDifficulty,
@@ -83,47 +84,61 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   return (
     <div className="fixed inset-0 flex flex-col justify-between p-4 md:p-6 z-30 select-none bg-gradient-to-b from-[#090a0f]/94 via-[#0c101d]/92 to-[#090a0f]/96 text-white overflow-y-auto">
       {/* Top Bar (Clean 3-zone header) */}
-      <header className="flex items-center justify-between gap-4 w-full max-w-4xl mx-auto shrink-0">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-9 h-9 rounded-lg bg-red-600 flex items-center justify-center font-black text-xl italic tracking-tighter shadow-lg shadow-red-500/30 shrink-0">
+      <header className="flex items-center justify-between gap-2 sm:gap-4 w-full max-w-4xl mx-auto shrink-0">
+        <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+          <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-red-600 flex items-center justify-center font-black text-lg sm:text-xl italic tracking-tighter shadow-lg shadow-red-500/30 shrink-0">
             A
           </div>
-          <h1 className="text-xl md:text-2xl font-black italic tracking-wider uppercase text-white whitespace-nowrap shrink-0">
+          <h1 className="text-base sm:text-xl md:text-2xl font-black italic tracking-wide sm:tracking-wider uppercase text-white whitespace-nowrap shrink-0">
             Apex <span className="text-red-500">1-Touch</span>
           </h1>
         </div>
 
-        <div className="flex items-center gap-2.5 shrink-0">
+        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
           <button
             type="button"
             onClick={() => onOpenFeatures('career')}
             aria-label="Open Career Records and Offline Backup"
-            className="min-h-[40px] px-2.5 rounded-xl hover:bg-slate-900/90 flex items-center gap-2 text-xs font-mono font-bold text-amber-400 tabular-nums whitespace-nowrap cursor-pointer transition-colors"
+            className="min-h-[40px] px-1.5 sm:px-2.5 rounded-xl hover:bg-slate-900/90 flex items-center gap-1.5 text-[11px] sm:text-xs font-mono font-bold text-amber-400 tabular-nums whitespace-nowrap cursor-pointer transition-colors"
           >
             <span>{coins} CR</span>
             {trophies > 0 && (
               <>
-                <span className="text-slate-600" aria-hidden="true">·</span>
-                <span className="text-cyan-300">{trophies} Cups</span>
+                <span className="hidden sm:inline text-slate-600" aria-hidden="true">·</span>
+                <span className="hidden sm:inline text-cyan-300">{trophies} Cups</span>
               </>
             )}
             {winStreak > 0 && (
               <>
-                <span className="text-slate-600" aria-hidden="true">·</span>
-                <span className="text-emerald-400">{winStreak} Streak</span>
+                <span className="hidden sm:inline text-slate-600" aria-hidden="true">·</span>
+                <span className="hidden sm:inline text-emerald-400">{winStreak} Streak</span>
               </>
             )}
           </button>
 
           <PWAInstallButton />
 
+          {typeof window !== 'undefined' &&
+            window.location.protocol !== 'file:' &&
+            window.location.protocol !== 'capacitor:' && (
+              <a
+                href="/downloads/Apex-One-Touch-Racing-v1.0.0-offline.apk"
+                download="Apex-One-Touch-Racing-v1.0.0-offline.apk"
+                aria-label="Download Offline Android APK"
+                className="min-h-[40px] px-2 sm:px-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/50 hover:bg-emerald-500/25 text-emerald-300 text-[11px] sm:text-xs font-mono font-bold flex items-center gap-1 whitespace-nowrap active:scale-95 transition-all"
+              >
+                <Download size={13} className="shrink-0" />
+                <span>APK</span>
+              </a>
+            )}
+
           <button
             type="button"
             onClick={onToggleMute}
             aria-label={isMuted ? 'Unmute Audio' : 'Mute Audio'}
-            className="min-w-[44px] min-h-[44px] rounded-xl bg-slate-900/90 border border-slate-700/70 flex items-center justify-center text-slate-300 hover:text-white hover:border-slate-500 active:scale-95 transition-all cursor-pointer"
+            className="min-w-[40px] min-h-[40px] sm:min-w-[44px] sm:min-h-[44px] rounded-xl bg-slate-900/90 border border-slate-700/70 flex items-center justify-center text-slate-300 hover:text-white hover:border-slate-500 active:scale-95 transition-all cursor-pointer"
           >
-            {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+            {isMuted ? <VolumeX size={17} /> : <Volume2 size={17} />}
           </button>
         </div>
       </header>

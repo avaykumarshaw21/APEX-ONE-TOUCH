@@ -841,13 +841,27 @@ export const FeaturesMenuModal: React.FC<FeaturesMenuModalProps> = ({
                   <PWAInstallButton />
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-                  <div className="p-2.5 rounded-lg bg-slate-900/70 border border-slate-800">
-                    <div className="font-bold text-white flex items-center gap-1.5">
-                      <Smartphone size={13} className="text-emerald-400" /> Android APK
+                  <div className="p-2.5 rounded-lg bg-slate-900/70 border border-emerald-500/40 flex flex-col justify-between gap-2">
+                    <div>
+                      <div className="font-bold text-white flex items-center gap-1.5">
+                        <Smartphone size={13} className="text-emerald-400" /> Android APK
+                      </div>
+                      <div className="text-[11px] text-slate-400 mt-0.5 font-mono">
+                        Signed v1.0.0 · 4.5 MB Offline
+                      </div>
                     </div>
-                    <div className="text-[11px] text-slate-400 mt-0.5 font-mono">
-                      Capacitor Gradle project synced
-                    </div>
+                    {typeof window !== 'undefined' &&
+                      window.location.protocol !== 'file:' &&
+                      window.location.protocol !== 'capacitor:' && (
+                        <a
+                          href="/downloads/Apex-One-Touch-Racing-v1.0.0-offline.apk"
+                          download="Apex-One-Touch-Racing-v1.0.0-offline.apk"
+                          className="min-h-[34px] px-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-mono font-black text-[11px] flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors"
+                        >
+                          <Download size={13} />
+                          <span>Download APK</span>
+                        </a>
+                      )}
                   </div>
                   <div className="p-2.5 rounded-lg bg-slate-900/70 border border-slate-800">
                     <div className="font-bold text-white flex items-center gap-1.5">

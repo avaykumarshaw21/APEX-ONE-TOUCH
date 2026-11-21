@@ -20,7 +20,11 @@ android/local.properties
 ios/App/Pods/
 ios/DerivedData/
 
-# Keep only the final offline APK in release/ (ignore oversized desktop installers & unpacked binaries)
-release/*
-!release/Apex-One-Touch-Racing-v1.0.0-offline.apk
+# Ignore oversized desktop installers & unpacked binaries while keeping the 4.5 MB offline APK visible
+release/*.7z
+release/*.exe
+release/*.yml
+release/*.blockmap
+release/win-unpacked/
+
 
