@@ -3,7 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { RaceMission, RaceMode, RacePerkId, TrackWeather, CarEntity } from './types';
+import {
+  AIDifficulty,
+  CarLivery,
+  CarEntity,
+  RaceMission,
+  RaceMode,
+  RacePerkId,
+  TrackWeather,
+} from './types';
 
 export interface RaceModeMeta {
   id: RaceMode;
@@ -30,6 +38,42 @@ export const RACE_MODES: RaceModeMeta[] = [
     name: 'Drift Fever',
     tagline: 'Stack drift, mini-turbo, and near-miss combos for a 5x Fever payout.',
     bonusNote: 'Combo Payout x2',
+  },
+];
+
+export interface AIDifficultyMeta {
+  id: AIDifficulty;
+  name: string;
+  summary: string;
+  speedScale: number;
+  accelScale: number;
+  prizeMultiplier: number;
+}
+
+export const AI_DIFFICULTIES: AIDifficultyMeta[] = [
+  {
+    id: 'amateur',
+    name: 'Amateur',
+    summary: 'Relaxed pack pace · 1.0x CR',
+    speedScale: 0.9,
+    accelScale: 0.88,
+    prizeMultiplier: 1.0,
+  },
+  {
+    id: 'pro',
+    name: 'Pro',
+    summary: 'Competitive apex battle · 1.2x CR',
+    speedScale: 1.0,
+    accelScale: 1.0,
+    prizeMultiplier: 1.2,
+  },
+  {
+    id: 'ace',
+    name: 'Ace',
+    summary: 'Relentless championship pace · 1.45x CR',
+    speedScale: 1.08,
+    accelScale: 1.1,
+    prizeMultiplier: 1.45,
   },
 ];
 
@@ -76,12 +120,65 @@ export const RACE_PERKS: RacePerkMeta[] = [
     color: '#f97316',
   },
   {
+    id: 'apex_overdrive',
+    name: 'Apex Overdrive',
+    cost: 280,
+    summary: 'Extends drift Mini-Turbo and Ultra-Turbo exit boost duration by +45%.',
+    effectShort: '+45% Turbo Exit',
+    color: '#ec4899',
+  },
+  {
     id: 'slipstream_pro',
     name: 'Slipstream Pro',
     cost: 300,
     summary: 'Doubles aerodynamic drafting pocket range and boosts draft surge to +32%.',
     effectShort: '2x Draft Range',
     color: '#a855f7',
+  },
+];
+
+export const CAR_LIVERIES: CarLivery[] = [
+  {
+    id: 'factory',
+    name: 'Factory',
+    primaryColor: '',
+    secondaryColor: '',
+    accentColor: '',
+  },
+  {
+    id: 'crimson_gp',
+    name: 'Crimson GP',
+    primaryColor: '#dc2626',
+    secondaryColor: '#0f172a',
+    accentColor: '#facc15',
+  },
+  {
+    id: 'cyber_cyan',
+    name: 'Cyber Cyan',
+    primaryColor: '#06b6d4',
+    secondaryColor: '#1e1b4b',
+    accentColor: '#e0f2fe',
+  },
+  {
+    id: 'emerald_gt',
+    name: 'Racing Green',
+    primaryColor: '#16a34a',
+    secondaryColor: '#052e16',
+    accentColor: '#fde047',
+  },
+  {
+    id: 'solar_gold',
+    name: 'Solar Gold',
+    primaryColor: '#eab308',
+    secondaryColor: '#18181b',
+    accentColor: '#ffffff',
+  },
+  {
+    id: 'obsidian_rose',
+    name: 'Stealth Rose',
+    primaryColor: '#1e293b',
+    secondaryColor: '#090a0f',
+    accentColor: '#fb7185',
   },
 ];
 

@@ -5,11 +5,15 @@ import {defineConfig} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
 
 export default defineConfig(() => {
+  const isDesktopTarget = process.env.BUILD_TARGET === 'desktop';
+
   return {
+    base: isDesktopTarget ? './' : '/',
     plugins: [
       react(),
       tailwindcss(),
       VitePWA({
+        disable: isDesktopTarget,
         registerType: 'autoUpdate',
         includeAssets: [
           'favicon.ico',

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   X,
   Play,
@@ -19,32 +19,62 @@ import {
   Check,
   Lock,
   Award,
+  Trophy,
+  Download,
+  Upload,
+  RotateCcw,
+  HardDrive,
+  Smartphone,
+  Monitor,
+  Gift,
+  Gauge,
 } from 'lucide-react';
 import {
+  AIDifficulty,
   CameraZoomMode,
   PlayerProgress,
   RaceMode,
   RacePerkId,
+  TrackGhostLap,
   TrackWeather,
 } from '../game/types';
-import { RACE_MODES, RACE_PERKS, TRACK_WEATHERS } from '../game/features';
+import { AI_DIFFICULTIES, RACE_MODES, RACE_PERKS, TRACK_WEATHERS } from '../game/features';
+import { TRACKS } from '../game/tracks';
+import { PWAInstallButton } from './PWAControls';
+
+export type FeaturesTabId = 'modes' | 'missions' | 'controls' | 'career';
 
 interface FeaturesMenuModalProps {
-  initialTab?: 'modes' | 'missions' | 'controls';
+  initialTab?: FeaturesTabId;
   progress: PlayerProgress;
+  ghostLaps: { [trackId: string]: TrackGhostLap };
   raceMode: RaceMode;
   onSetRaceMode: (mode: RaceMode) => void;
+  aiDifficulty: AIDifficulty;
+  onSetAiDifficulty: (diff: AIDifficulty) => void;
   weather: TrackWeather;
   onSetWeather: (w: TrackWeather) => void;
   onEquipPerk: (perkId: RacePerkId) => void;
   onUnlockPerk: (perkId: RacePerkId, cost: number) => void;
   onClaimMission: (missionId: string) => void;
+  canClaimDaily: boolean;
+  dailyRewardAmount: number;
+  onClaimDaily: () => void;
   steeringSensitivity: number;
   onSetSteeringSensitivity: (val: number) => void;
   autoDriftAssist: boolean;
   onSetAutoDriftAssist: (val: boolean) => void;
   cameraZoom: CameraZoomMode;
   onSetCameraZoom: (val: CameraZoomMode) => void;
+  hapticsEnabled: boolean;
+  onSetHapticsEnabled: (val: boolean) => void;
+  showMinimap: boolean;
+  onSetShowMinimap: (val: boolean) => void;
+  isMuted: boolean;
+  onToggleMute: () => void;
+  onExportSave: () => void;
+  onImportSave: (jsonText: string) => boolean;
+  onResetSave: () => void;
   onStartRace: () => void;
   onClose: () => void;
 }
@@ -52,23 +82,41 @@ interface FeaturesMenuModalProps {
 export const FeaturesMenuModal: React.FC<FeaturesMenuModalProps> = ({
   initialTab = 'modes',
   progress,
+  ghostLaps,
   raceMode,
   onSetRaceMode,
+  aiDifficulty,
+  onSetAiDifficulty,
   weather,
   onSetWeather,
   onEquipPerk,
   onUnlockPerk,
   onClaimMission,
+  canClaimDaily,
+  dailyRewardAmount,
+  onClaimDaily,
   steeringSensitivity,
   onSetSteeringSensitivity,
   autoDriftAssist,
   onSetAutoDriftAssist,
   cameraZoom,
   onSetCameraZoom,
+  hapticsEnabled,
+  onSetHapticsEnabled,
+  showMinimap,
+  onSetShowMinimap,
+  isMuted,
+  onToggleMute,
+  onExportSave,
+  onImportSave,
+  onResetSave,
   onStartRace,
   onClose,
 }) => {
-  const [activeTab, setActiveTab] = useState<'modes' | 'missions' | 'controls'>(initialTab);
+  const [activeTab, setActiveTab] = useState<FeaturesTabId>(initialTab);
+  const [saveNotice, setSaveNotice] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const claimableCount = progress.missions.filter(
     (m) => !m.claimed && m.progress >= m.target
@@ -76,28 +124,41 @@ export const FeaturesMenuModal: React.FC<FeaturesMenuModalProps> = ({
 
   const streakMultiplier = Math.min(2.0, 1 + progress.winStreak * 0.25);
 
+  const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const ok = onImportSave(String(reader.result || ''));
+      setSaveNotice(ok ? 'Device save restored successfully.' : 'Invalid save backup file.');
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
   return (
-    <div className="fixed inset-0 z-40 bg-slate-950/92 backdrop-blur-md flex items-center justify-center p-3 select-none text-white">
+    <div className="fixed inset-0 z-40 bg-slate-950/95 flex items-center justify-center p-3 select-none text-white">
       <div className="w-full max-w-2xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-slate-800">
           <div>
             <h2 className="text-lg font-black italic tracking-wide uppercase text-white">
-              Race Playbook &amp; Features
+              Race Playbook &amp; Career
             </h2>
             <p className="text-xs text-slate-400">
-              Customize modes, perks, and handling to improvise your winning strategy
+              Modes, AI difficulty, driving settings &amp; permanent offline save
             </p>
           </div>
 
           <div className="flex items-center gap-3">
-            <span className="font-mono text-xs font-bold text-amber-400 tabular-nums">
+            <span className="font-mono text-xs font-bold text-amber-400 tabular-nums whitespace-nowrap">
               {progress.coins} CR
             </span>
             <button
+              type="button"
               onClick={onClose}
               aria-label="Close features menu"
-              className="min-w-[44px] min-h-[44px] rounded-xl bg-slate-800 flex items-center justify-center text-slate-300 hover:text-white active:scale-95 transition-transform"
+              className="min-w-[44px] min-h-[44px] rounded-xl bg-slate-800 flex items-center justify-center text-slate-300 hover:text-white active:scale-95 transition-transform cursor-pointer"
             >
               <X size={18} />
             </button>
@@ -106,46 +167,59 @@ export const FeaturesMenuModal: React.FC<FeaturesMenuModalProps> = ({
 
         {/* Segmented Tab Navigation */}
         <div className="px-4 pt-3 pb-2 bg-slate-950/60 border-b border-slate-800">
-          <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-950 rounded-xl border border-slate-800">
+          <div className="grid grid-cols-4 gap-1 p-1 bg-slate-950 rounded-xl border border-slate-800">
             <button
+              type="button"
               onClick={() => setActiveTab('modes')}
-              className={`min-h-[44px] px-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
+              className={`min-h-[42px] px-1.5 rounded-lg text-[11px] sm:text-xs font-bold flex items-center justify-center gap-1 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                 activeTab === 'modes'
                   ? 'bg-red-600 text-white shadow-sm'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              <Flame size={15} />
-              <span>Modes &amp; Perks</span>
+              <Flame size={14} className="shrink-0" />
+              <span>Modes</span>
             </button>
 
             <button
+              type="button"
               onClick={() => setActiveTab('missions')}
-              className={`min-h-[44px] px-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 transition-colors relative ${
+              className={`min-h-[42px] px-1.5 rounded-lg text-[11px] sm:text-xs font-bold flex items-center justify-center gap-1 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                 activeTab === 'missions'
                   ? 'bg-red-600 text-white shadow-sm'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              <Target size={15} />
-              <span>Missions</span>
-              {claimableCount > 0 && (
-                <span className="ml-0.5 font-mono text-[11px] font-black text-amber-300">
-                  ({claimableCount})
-                </span>
-              )}
+              <Target size={14} className="shrink-0" />
+              <span>
+                Missions{claimableCount > 0 ? ` (${claimableCount})` : ''}
+              </span>
             </button>
 
             <button
+              type="button"
               onClick={() => setActiveTab('controls')}
-              className={`min-h-[44px] px-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
+              className={`min-h-[42px] px-1.5 rounded-lg text-[11px] sm:text-xs font-bold flex items-center justify-center gap-1 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                 activeTab === 'controls'
                   ? 'bg-red-600 text-white shadow-sm'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              <Sliders size={15} />
-              <span>Driving Lab</span>
+              <Sliders size={14} className="shrink-0" />
+              <span>Driving</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('career')}
+              className={`min-h-[42px] px-1.5 rounded-lg text-[11px] sm:text-xs font-bold flex items-center justify-center gap-1 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                activeTab === 'career'
+                  ? 'bg-red-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Trophy size={14} className="shrink-0" />
+              <span>Career</span>
             </button>
           </div>
         </div>
@@ -167,8 +241,9 @@ export const FeaturesMenuModal: React.FC<FeaturesMenuModalProps> = ({
                     return (
                       <button
                         key={m.id}
+                        type="button"
                         onClick={() => onSetRaceMode(m.id)}
-                        className={`p-3.5 rounded-xl border text-left transition-all flex flex-col justify-between gap-2 min-h-[104px] ${
+                        className={`p-3.5 rounded-xl border text-left transition-all flex flex-col justify-between gap-2 min-h-[104px] cursor-pointer ${
                           selected
                             ? 'bg-slate-800 border-red-500 shadow-md shadow-red-500/10'
                             : 'bg-slate-950/70 border-slate-800 hover:border-slate-700'
@@ -184,6 +259,37 @@ export const FeaturesMenuModal: React.FC<FeaturesMenuModalProps> = ({
                         <span className="text-[11px] font-mono text-amber-400 font-bold">
                           {m.bonusNote}
                         </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+
+              {/* AI Rival Difficulty */}
+              <section className="space-y-2.5">
+                <div className="flex items-baseline justify-between">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
+                    <Gauge size={14} className="text-cyan-400" /> AI Rival Pace
+                  </h3>
+                  <span className="text-xs text-slate-400">Saved automatically</span>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  {AI_DIFFICULTIES.map((diff) => {
+                    const active = aiDifficulty === diff.id;
+                    return (
+                      <button
+                        key={diff.id}
+                        type="button"
+                        onClick={() => onSetAiDifficulty(diff.id)}
+                        className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                          active
+                            ? 'bg-slate-800 border-cyan-400 text-white'
+                            : 'bg-slate-950/70 border-slate-800 text-slate-300 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="text-xs font-black uppercase italic">{diff.name}</div>
+                        <div className="text-[11px] text-slate-400 mt-0.5">{diff.summary}</div>
                       </button>
                     );
                   })}
@@ -206,15 +312,10 @@ export const FeaturesMenuModal: React.FC<FeaturesMenuModalProps> = ({
                     return (
                       <div
                         key={perk.id}
-                        onClick={() => {
-                          if (isUnlocked) onEquipPerk(perk.id);
-                        }}
                         className={`p-3.5 rounded-xl border flex flex-col justify-between gap-2 transition-all ${
-                          isUnlocked ? 'cursor-pointer' : ''
-                        } ${
                           isEquipped
                             ? 'bg-slate-800 border-cyan-400 shadow-md shadow-cyan-500/10'
-                            : 'bg-slate-950/70 border-slate-800 hover:border-slate-700'
+                            : 'bg-slate-950/70 border-slate-800'
                         }`}
                       >
                         <div className="flex items-center justify-between gap-2">
@@ -242,22 +343,18 @@ export const FeaturesMenuModal: React.FC<FeaturesMenuModalProps> = ({
                             </span>
                           ) : isUnlocked ? (
                             <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onEquipPerk(perk.id);
-                              }}
-                              className="min-h-[36px] px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200 whitespace-nowrap"
+                              type="button"
+                              onClick={() => onEquipPerk(perk.id)}
+                              className="min-h-[36px] px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200 whitespace-nowrap cursor-pointer"
                             >
                               Equip
                             </button>
                           ) : (
                             <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onUnlockPerk(perk.id, perk.cost);
-                              }}
+                              type="button"
+                              onClick={() => onUnlockPerk(perk.id, perk.cost)}
                               disabled={progress.coins < perk.cost}
-                              className="min-h-[36px] px-3 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:opacity-45 text-slate-950 font-mono font-black text-xs flex items-center gap-1 whitespace-nowrap"
+                              className="min-h-[36px] px-3 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:opacity-45 text-slate-950 font-mono font-black text-xs flex items-center gap-1 whitespace-nowrap cursor-pointer"
                             >
                               <Lock size={12} />
                               <span>{perk.cost} CR</span>
@@ -285,8 +382,9 @@ export const FeaturesMenuModal: React.FC<FeaturesMenuModalProps> = ({
                     return (
                       <button
                         key={w.id}
+                        type="button"
                         onClick={() => onSetWeather(w.id)}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-3 min-h-[60px] transition-all ${
+                        className={`p-3 rounded-xl border text-left flex items-center gap-3 min-h-[60px] transition-all cursor-pointer ${
                           active
                             ? 'bg-slate-800 border-amber-400'
                             : 'bg-slate-950/70 border-slate-800 hover:border-slate-700'
@@ -314,7 +412,34 @@ export const FeaturesMenuModal: React.FC<FeaturesMenuModalProps> = ({
           )}
 
           {activeTab === 'missions' && (
-            <div className="space-y-5">
+            <div className="space-y-4">
+              {/* Daily Offline Bonus Card */}
+              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+                    <Gift size={22} />
+                  </div>
+                  <div>
+                    <div className="text-sm font-bold text-white">Daily Offline Check-In</div>
+                    <div className="text-xs text-slate-400">
+                      Streak: {progress.dailyStreak} day(s) · Stored locally on device
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={!canClaimDaily}
+                  onClick={onClaimDaily}
+                  className={`min-h-[44px] px-4 rounded-xl text-xs font-black uppercase tracking-wide whitespace-nowrap shrink-0 transition-all ${
+                    canClaimDaily
+                      ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 cursor-pointer'
+                      : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                  }`}
+                >
+                  {canClaimDaily ? `Claim +${dailyRewardAmount}` : 'Claimed Today'}
+                </button>
+              </div>
+
               {/* Win Streak Card */}
               <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
@@ -381,11 +506,12 @@ export const FeaturesMenuModal: React.FC<FeaturesMenuModalProps> = ({
                       </div>
 
                       <button
+                        type="button"
                         onClick={() => onClaimMission(mission.id)}
                         disabled={!isReady}
                         className={`min-h-[44px] px-4 rounded-xl text-xs font-black uppercase tracking-wide whitespace-nowrap shrink-0 transition-all ${
                           isReady
-                            ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-lg shadow-emerald-500/20 active:scale-95'
+                            ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-lg shadow-emerald-500/20 active:scale-95 cursor-pointer'
                             : 'bg-slate-800 text-slate-500 cursor-not-allowed'
                         }`}
                       >
@@ -399,16 +525,14 @@ export const FeaturesMenuModal: React.FC<FeaturesMenuModalProps> = ({
           )}
 
           {activeTab === 'controls' && (
-            <div className="space-y-5">
+            <div className="space-y-4">
               {/* Steering Sensitivity */}
               <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
-                <div className="flex items-baseline justify-between">
-                  <div>
-                    <h3 className="text-sm font-bold text-white">One-Finger Steering Sensitivity</h3>
-                    <p className="text-xs text-slate-400">
-                      Adjust how quickly thumb swipe reaches full steering lock
-                    </p>
-                  </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">One-Finger Steering Sensitivity</h3>
+                  <p className="text-xs text-slate-400">
+                    Adjust how quickly thumb swipe reaches full steering lock
+                  </p>
                 </div>
                 <div className="grid grid-cols-3 gap-2">
                   {[
@@ -418,8 +542,9 @@ export const FeaturesMenuModal: React.FC<FeaturesMenuModalProps> = ({
                   ].map((opt) => (
                     <button
                       key={opt.label}
+                      type="button"
                       onClick={() => onSetSteeringSensitivity(opt.val)}
-                      className={`min-h-[44px] rounded-xl text-xs font-bold border transition-all whitespace-nowrap ${
+                      className={`min-h-[44px] rounded-xl text-xs font-bold border transition-all whitespace-nowrap cursor-pointer ${
                         steeringSensitivity === opt.val
                           ? 'bg-cyan-600 border-cyan-400 text-white'
                           : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
@@ -441,8 +566,9 @@ export const FeaturesMenuModal: React.FC<FeaturesMenuModalProps> = ({
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <button
+                    type="button"
                     onClick={() => onSetAutoDriftAssist(true)}
-                    className={`min-h-[56px] p-3 rounded-xl border text-left transition-all ${
+                    className={`min-h-[56px] p-3 rounded-xl border text-left transition-all cursor-pointer ${
                       autoDriftAssist
                         ? 'bg-slate-800 border-cyan-400 text-white'
                         : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
@@ -455,8 +581,9 @@ export const FeaturesMenuModal: React.FC<FeaturesMenuModalProps> = ({
                   </button>
 
                   <button
+                    type="button"
                     onClick={() => onSetAutoDriftAssist(false)}
-                    className={`min-h-[56px] p-3 rounded-xl border text-left transition-all ${
+                    className={`min-h-[56px] p-3 rounded-xl border text-left transition-all cursor-pointer ${
                       !autoDriftAssist
                         ? 'bg-slate-800 border-red-500 text-white'
                         : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
@@ -480,8 +607,9 @@ export const FeaturesMenuModal: React.FC<FeaturesMenuModalProps> = ({
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <button
+                    type="button"
                     onClick={() => onSetCameraZoom('normal')}
-                    className={`min-h-[44px] rounded-xl text-xs font-bold border transition-all whitespace-nowrap ${
+                    className={`min-h-[44px] rounded-xl text-xs font-bold border transition-all whitespace-nowrap cursor-pointer ${
                       cameraZoom === 'normal'
                         ? 'bg-cyan-600 border-cyan-400 text-white'
                         : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
@@ -490,8 +618,9 @@ export const FeaturesMenuModal: React.FC<FeaturesMenuModalProps> = ({
                     Close Action View
                   </button>
                   <button
+                    type="button"
                     onClick={() => onSetCameraZoom('wide')}
-                    className={`min-h-[44px] rounded-xl text-xs font-bold border transition-all whitespace-nowrap ${
+                    className={`min-h-[44px] rounded-xl text-xs font-bold border transition-all whitespace-nowrap cursor-pointer ${
                       cameraZoom === 'wide'
                         ? 'bg-cyan-600 border-cyan-400 text-white'
                         : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
@@ -501,6 +630,243 @@ export const FeaturesMenuModal: React.FC<FeaturesMenuModalProps> = ({
                   </button>
                 </div>
               </div>
+
+              {/* Device Preferences: Audio, Haptics & Minimap */}
+              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+                <div>
+                  <h3 className="text-sm font-bold text-white">Audio, Haptics &amp; HUD</h3>
+                  <p className="text-xs text-slate-400">
+                    All preferences save permanently on this device
+                  </p>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={onToggleMute}
+                    className={`min-h-[44px] rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                      !isMuted
+                        ? 'bg-slate-800 border-emerald-400 text-emerald-300'
+                        : 'bg-slate-900 border-slate-800 text-slate-400'
+                    }`}
+                  >
+                    Sound: {isMuted ? 'Muted' : 'On'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onSetHapticsEnabled(!hapticsEnabled)}
+                    className={`min-h-[44px] rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                      hapticsEnabled
+                        ? 'bg-slate-800 border-cyan-400 text-cyan-300'
+                        : 'bg-slate-900 border-slate-800 text-slate-400'
+                    }`}
+                  >
+                    Haptics: {hapticsEnabled ? 'On' : 'Off'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onSetShowMinimap(!showMinimap)}
+                    className={`min-h-[44px] rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                      showMinimap
+                        ? 'bg-slate-800 border-amber-400 text-amber-300'
+                        : 'bg-slate-900 border-slate-800 text-slate-400'
+                    }`}
+                  >
+                    Minimap: {showMinimap ? 'On' : 'Off'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'career' && (
+            <div className="space-y-4">
+              {/* Career Summary Stats */}
+              <section className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <Trophy size={15} className="text-amber-400" /> Career &amp; Championship
+                  </h3>
+                  <span className="font-mono text-xs text-amber-400 font-bold tabular-nums">
+                    {progress.championship.points} Season Pts
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800">
+                    <div className="text-[10px] font-mono text-slate-400 uppercase">Races / Wins</div>
+                    <div className="text-sm font-black font-mono text-white tabular-nums mt-0.5">
+                      {progress.championship.totalRaces} / {progress.championship.totalWins}
+                    </div>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800">
+                    <div className="text-[10px] font-mono text-slate-400 uppercase">Podiums</div>
+                    <div className="text-sm font-black font-mono text-cyan-300 tabular-nums mt-0.5">
+                      {progress.championship.totalPodiums}
+                    </div>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800">
+                    <div className="text-[10px] font-mono text-slate-400 uppercase">Best Drift</div>
+                    <div className="text-sm font-black font-mono text-amber-400 tabular-nums mt-0.5">
+                      {progress.championship.bestDriftScore}
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              {/* Track Records Table */}
+              <section className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
+                <h3 className="text-sm font-bold text-white">Track Lap &amp; Ghost Records</h3>
+                <div className="space-y-1.5">
+                  {TRACKS.map((track) => {
+                    const lap = progress.bestLapTimes[track.id];
+                    const race = progress.bestRaceTimes[track.id];
+                    const rank = progress.bestRanks[track.id];
+                    const ghost = ghostLaps[track.id];
+                    return (
+                      <div
+                        key={track.id}
+                        className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-slate-900/70 border border-slate-800/80 text-xs font-mono tabular-nums"
+                      >
+                        <span className="font-sans font-bold text-slate-200 truncate">
+                          {track.name}
+                        </span>
+                        <div className="flex items-center gap-2 text-[11px] text-slate-400 shrink-0">
+                          <span>{lap && lap < 999 ? `Lap ${lap.toFixed(2)}s` : 'No Lap'}</span>
+                          {race && race < 9999 && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span>Race {race.toFixed(1)}s</span>
+                            </>
+                          )}
+                          {rank && rank < 99 && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="text-amber-400">#{rank}</span>
+                            </>
+                          )}
+                          {ghost && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="text-cyan-400">Ghost</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+
+              {/* Offline Audit & Device Storage Backup */}
+              <section className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <HardDrive size={15} className="text-emerald-400" /> Device Save &amp; Offline Audit
+                  </h3>
+                  <span className="text-[11px] font-mono text-emerald-400 font-bold">
+                    100% Local
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Tracks, procedural Web Audio SFX, AI opponents, ghost trajectories, upgrades, and
+                  settings run strictly on-device with zero external APIs or cloud dependencies.
+                </p>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onExportSave();
+                      setSaveNotice('Offline save backup downloaded.');
+                    }}
+                    className="min-h-[40px] px-3.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-100 flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Download size={14} className="text-cyan-400" />
+                    <span>Export Save</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="min-h-[40px] px-3.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-100 flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Upload size={14} className="text-amber-400" />
+                    <span>Import Save</span>
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="application/json"
+                    onChange={handleImportFile}
+                    className="hidden"
+                  />
+
+                  {!confirmReset ? (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmReset(true)}
+                      className="min-h-[40px] px-3.5 rounded-lg bg-slate-900 hover:bg-red-950/60 border border-slate-800 hover:border-red-500/50 text-xs font-bold text-rose-400 flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <RotateCcw size={14} />
+                      <span>Reset Data</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onResetSave();
+                        setConfirmReset(false);
+                        setSaveNotice('Device save reset to factory defaults.');
+                      }}
+                      className="min-h-[40px] px-3.5 rounded-lg bg-red-600 hover:bg-red-500 text-xs font-black text-white cursor-pointer"
+                    >
+                      Confirm Reset
+                    </button>
+                  )}
+                </div>
+
+                {saveNotice && (
+                  <p className="text-xs font-mono text-cyan-300" role="status">
+                    {saveNotice}
+                  </p>
+                )}
+              </section>
+
+              {/* Multi-Platform Build Readiness */}
+              <section className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <Smartphone size={15} className="text-cyan-400" /> Native &amp; Desktop Targets
+                  </h3>
+                  <PWAInstallButton />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                  <div className="p-2.5 rounded-lg bg-slate-900/70 border border-slate-800">
+                    <div className="font-bold text-white flex items-center gap-1.5">
+                      <Smartphone size={13} className="text-emerald-400" /> Android APK
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-0.5 font-mono">
+                      Capacitor Gradle project synced
+                    </div>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-900/70 border border-slate-800">
+                    <div className="font-bold text-white flex items-center gap-1.5">
+                      <Monitor size={13} className="text-cyan-400" /> Windows EXE
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-0.5 font-mono">
+                      Electron NSIS installer target
+                    </div>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-900/70 border border-slate-800">
+                    <div className="font-bold text-white flex items-center gap-1.5">
+                      <Smartphone size={13} className="text-amber-400" /> iPhone Xcode
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-0.5 font-mono">
+                      Capacitor iOS App project synced
+                    </div>
+                  </div>
+                </div>
+              </section>
             </div>
           )}
         </div>
@@ -508,15 +874,17 @@ export const FeaturesMenuModal: React.FC<FeaturesMenuModalProps> = ({
         {/* Footer */}
         <div className="p-4 border-t border-slate-800 flex items-center justify-between gap-3 bg-slate-950/80">
           <button
+            type="button"
             onClick={onClose}
-            className="min-h-[44px] px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200 whitespace-nowrap"
+            className="min-h-[44px] px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200 whitespace-nowrap cursor-pointer"
           >
             Back to Menu
           </button>
           <button
+            type="button"
             data-start="true"
             onClick={onStartRace}
-            className="min-h-[44px] px-6 rounded-xl bg-red-600 hover:bg-red-500 text-white font-black italic text-xs tracking-wider uppercase flex items-center gap-2 shadow-lg shadow-red-600/30 whitespace-nowrap active:scale-95 transition-transform"
+            className="min-h-[44px] px-6 rounded-xl bg-red-600 hover:bg-red-500 text-white font-black italic text-xs tracking-wider uppercase flex items-center gap-2 shadow-lg shadow-red-600/30 whitespace-nowrap active:scale-95 transition-transform cursor-pointer"
           >
             <Play size={15} className="fill-white" />
             <span>Launch Race</span>

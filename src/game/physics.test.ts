@@ -287,3 +287,45 @@ test('Live missions advance progress and rotate cleanly when claimed', () => {
   assert.equal(rotated.length, INITIAL_MISSIONS.length, 'Maintains 3 active missions after claiming');
   assert.notEqual(rotated[0].id, nearMissMission.id, 'Claimed mission rotates to a fresh objective');
 });
+
+test('Barrier constraint deflects steep wall hits inward and preserves glide speed so car never gets stuck', () => {
+  const points: TrackPoint[] = [
+    { x: 0, y: 0 },
+    { x: 600, y: 0 },
+    { x: 600, y: 600 },
+    { x: 0, y: 600 },
+  ];
+  const baked = bakeTrack(points, 120);
+  const roadWidth = 220;
+  const car = createMockCar('player', true, 0, 300, 180); // Past right barrier
+  car.trackSampleIndex = 15;
+  car.speed = 360;
+  car.angle = Math.PI * 0.4; // Aimed sharply into right barrier
+  car.bumpVelocityY = 90;
+
+  const res = constrainCarToRoad(car, roadWidth, baked, 0.016);
+  assert.equal(res.collided, true);
+  assert.equal(res.side, 'right');
+  assert.ok(car.speed >= car.carStats.baseTopSpeed * 0.65, 'Car preserves high wall-slide speed instead of stalling');
+
+  const locAfter = findNearestTrackSample(car.x, car.y, baked, car.trackSampleIndex);
+  const relAngle = Math.atan2(Math.sin(car.angle - locAfter.sample.angle), Math.cos(car.angle - locAfter.sample.angle));
+  assert.ok(relAngle < 0, `Heading (${relAngle.toFixed(3)}) is redirected inward away from right wall`);
+  assert.ok(car.bumpVelocityY <= 0, 'Outward bump velocity into barrier is cancelled');
+});
+
+test('Car-to-car collisions push apart with bumpVelocity without stalling speed', () => {
+  const carA = createMockCar('a', true, 100, 100, 100);
+  const carB = createMockCar('b', false, 100, 112, 100);
+  carA.speed = 320;
+  carB.speed = 320;
+  carA.vx = 200;
+  carB.vx = -200;
+
+  const collided = resolveCarCollision(carA, carB, 22);
+  assert.equal(collided, true);
+  assert.ok(Math.abs(carA.bumpVelocityX) > 0, 'Applies persistent lateral bump velocity');
+  assert.ok(carA.speed >= carA.carStats.baseTopSpeed * 0.55, 'Collision does not stall car to near-zero speed');
+  assert.ok(carB.speed >= carB.carStats.baseTopSpeed * 0.55, 'Rival also keeps racing momentum');
+});
+

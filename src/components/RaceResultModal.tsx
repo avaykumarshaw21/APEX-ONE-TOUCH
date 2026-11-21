@@ -13,6 +13,8 @@ interface RaceResultModalProps {
   track: TrackDefinition;
   raceMode: RaceMode;
   coinsEarned: number;
+  championshipPointsEarned?: number;
+  newlyUnlockedTrackName?: string | null;
   hasReplay?: boolean;
   onWatchReplay?: () => void;
   onRestartRace: () => void;
@@ -26,6 +28,8 @@ export const RaceResultModal: React.FC<RaceResultModalProps> = ({
   track,
   raceMode,
   coinsEarned,
+  championshipPointsEarned = 0,
+  newlyUnlockedTrackName = null,
   hasReplay = false,
   onWatchReplay,
   onRestartRace,
@@ -77,9 +81,15 @@ export const RaceResultModal: React.FC<RaceResultModalProps> = ({
               ? 'Podium Finish!'
               : 'Race Finished'}
           </h2>
-          <p className="text-xs text-slate-400 font-mono mt-0.5">
+          <p className="text-xs text-slate-400 font-mono mt-0.5 tabular-nums">
             {track.name} · {cars.length} Racers Grid
+            {championshipPointsEarned > 0 ? ` · +${championshipPointsEarned} Season Pts` : ''}
           </p>
+          {newlyUnlockedTrackName && (
+            <p className="text-xs font-mono font-bold text-emerald-400 mt-1">
+              Unlocked Circuit: {newlyUnlockedTrackName}
+            </p>
+          )}
 
           {/* Player Result Summary Cards */}
           <div className="grid grid-cols-3 gap-2 mt-4 max-w-sm mx-auto">

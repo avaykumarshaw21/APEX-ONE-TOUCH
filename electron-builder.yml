@@ -1,0 +1,28 @@
+appId: com.apexracing.onetouch
+productName: Apex One-Touch Racing
+copyright: Copyright © 2026 Apex One-Touch Racing
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - electron/**/*
+  - package.json
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  icon: electron/icons/icon.ico
+nsis:
+  artifactName: "${productName}-Setup-${version}-${arch}.${ext}"
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Apex One-Touch Racing
+portable:
+  artifactName: "${productName}-Portable-${version}-${arch}.${ext}"

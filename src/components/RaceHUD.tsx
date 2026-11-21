@@ -35,6 +35,7 @@ interface RaceHUDProps {
   ghostDeltaSeconds?: number | null;
   ghostBestLapTime?: number | null;
   isGhostDuel?: boolean;
+  showMinimap?: boolean;
 }
 
 export const RaceHUD: React.FC<RaceHUDProps> = ({
@@ -63,6 +64,7 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
   ghostDeltaSeconds = null,
   ghostBestLapTime = null,
   isGhostDuel = false,
+  showMinimap = true,
 }) => {
   const minimapCanvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -85,13 +87,15 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
       if (p.y < minY) minY = p.y;
       if (p.y > maxY) maxY = p.y;
     }
-    const pad = 40;
+    const pad = 12;
     const trackW = (maxX - minX) || 1;
     const trackH = (maxY - minY) || 1;
     const scale = Math.min((width - pad * 2) / trackW, (height - pad * 2) / trackH);
+    const offsetX = (width - trackW * scale) * 0.5;
+    const offsetY = (height - trackH * scale) * 0.5;
 
-    const mapX = (x: number) => pad + (x - minX) * scale;
-    const mapY = (y: number) => pad + (y - minY) * scale;
+    const mapX = (x: number) => offsetX + (x - minX) * scale;
+    const mapY = (y: number) => offsetY + (y - minY) * scale;
 
     ctx.lineWidth = 3;
     ctx.strokeStyle = '#334155';
@@ -186,7 +190,7 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
       <div className="flex items-start justify-between gap-1.5 w-full">
         {/* Left: Position & Lap Readout */}
         <div className="flex flex-col gap-1 pointer-events-auto shrink-0">
-          <div className="flex items-baseline gap-1.5 bg-slate-900/85 border border-slate-700/80 rounded-2xl px-3 py-1.5 shadow-xl backdrop-blur-xs whitespace-nowrap">
+          <div className="flex items-baseline gap-1.5 bg-slate-900/90 border border-slate-700/80 rounded-2xl px-3 py-1.5 shadow-xl whitespace-nowrap">
             <span className="font-mono text-2xl sm:text-3xl font-black italic tracking-tighter text-amber-400 tabular-nums">
               {positionOrdinal}
             </span>
@@ -311,12 +315,14 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
             </button>
           </div>
 
-          <div className="w-24 h-24 rounded-2xl bg-slate-950/85 border border-slate-800 p-1 shadow-2xl relative overflow-hidden backdrop-blur-xs">
-            <canvas ref={minimapCanvasRef} width={96} height={96} className="w-full h-full block" />
-            <div className="absolute bottom-1 right-1.5 text-[9px] font-mono text-slate-500 uppercase">
-              MAP
+          {showMinimap && (
+            <div className="w-24 h-24 rounded-2xl bg-slate-950/90 border border-slate-800 p-1 shadow-2xl relative overflow-hidden">
+              <canvas ref={minimapCanvasRef} width={96} height={96} className="w-full h-full block" />
+              <div className="absolute bottom-1 right-1.5 text-[9px] font-mono text-slate-500 uppercase">
+                MAP
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
 
@@ -343,7 +349,7 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
 
       {/* Bottom Area: Speedometer, Nitro Trigger & Steering Prompt */}
       <div className="flex items-end justify-between w-full max-w-lg mx-auto pb-2">
-        <div className="flex flex-col bg-slate-900/85 border border-slate-700/80 rounded-2xl px-4 py-2 pointer-events-auto backdrop-blur-xs shadow-xl">
+        <div className="flex flex-col bg-slate-900/90 border border-slate-700/80 rounded-2xl px-4 py-2 pointer-events-auto shadow-xl">
           <span className="text-[10px] font-mono tracking-wider text-slate-400 uppercase font-bold">
             Speed
           </span>

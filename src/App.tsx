@@ -10,12 +10,14 @@ import { LevelSelectModal } from './components/LevelSelectModal';
 import { GarageModal } from './components/GarageModal';
 import { RaceResultModal } from './components/RaceResultModal';
 import { PauseModal } from './components/PauseModal';
-import { FeaturesMenuModal } from './components/FeaturesMenuModal';
+import { FeaturesMenuModal, FeaturesTabId } from './components/FeaturesMenuModal';
 import { OfflineIndicator } from './components/PWAControls';
 import { ReplayHUD, ReplayCameraMode, ReplayPlaybackSpeed } from './components/ReplayHUD';
 import { TRACKS, CARS, AI_RIVALS_POOL } from './game/tracks';
 import {
+  AIDifficulty,
   GameState,
+  GameSettings,
   OpponentCount,
   CarEntity,
   Particle,
@@ -46,11 +48,29 @@ import {
   checkNearMiss,
 } from './game/physics';
 import {
-  INITIAL_MISSIONS,
+  AI_DIFFICULTIES,
   updateMissionProgress,
   rotateClaimedMission,
   findKnockoutEliminationTarget,
 } from './game/features';
+import {
+  applyRaceCompletionToProgress,
+  canClaimDailyBonus,
+  claimDailyBonus,
+  createDefaultProgress,
+  createDefaultSettings,
+  createOfflineSaveBundle,
+  getChampionshipPointsForRank,
+  getNextDailyBonusReward,
+  loadGhostsFromDevice,
+  loadProgressFromDevice,
+  loadSettingsFromDevice,
+  parseOfflineSaveBundle,
+  resolveCarStatsWithPaint,
+  saveGhostsToDevice,
+  saveProgressToDevice,
+  saveSettingsToDevice,
+} from './game/storage';
 import {
   createReplayRecorder,
   recordReplayFrame,
@@ -66,9 +86,6 @@ import {
 import { GameRenderer } from './game/renderer';
 import { sound } from './game/audio';
 
-const STORAGE_KEY = 'apex_one_touch_racing_v1';
-const GHOST_STORAGE_KEY = 'apex_one_touch_ghosts_v1';
-
 function getCountdownDisplay(timer: number): number {
   if (timer > 2.4) return 3;
   if (timer > 1.4) return 2;
@@ -80,86 +97,51 @@ function getCountdownDisplay(timer: number): number {
 export default function App() {
   // Game State
   const [gameState, setGameState] = useState<GameState>('title');
-  const [featuresTab, setFeaturesTab] = useState<'modes' | 'missions' | 'controls'>('modes');
-  const [selectedTrack, setSelectedTrack] = useState<TrackDefinition>(TRACKS[0]);
-  const [opponentCount, setOpponentCount] = useState<OpponentCount>(4);
-  const [raceMode, setRaceMode] = useState<RaceMode>('championship');
-  const [weather, setWeather] = useState<TrackWeather>('clear');
-  const [isMuted, setIsMuted] = useState<boolean>(false);
-  const [steeringSensitivity, setSteeringSensitivity] = useState<number>(1.0);
-  const [autoDriftAssist, setAutoDriftAssist] = useState<boolean>(true);
-  const [cameraZoom, setCameraZoom] = useState<CameraZoomMode>('normal');
-  const [lastRacePrize, setLastRacePrize] = useState<number>(0);
-  const [raceAgainstGhost, setRaceAgainstGhost] = useState<boolean>(false);
-  const [ghostLaps, setGhostLaps] = useState<{ [trackId: string]: TrackGhostLap }>(() => {
-    try {
-      const saved = localStorage.getItem(GHOST_STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && typeof parsed === 'object') {
-          return parsed;
-        }
-      }
-    } catch {
-      // Ignore
-    }
-    return {};
-  });
+  const [featuresTab, setFeaturesTab] = useState<FeaturesTabId>('modes');
+  const [settings, setSettings] = useState<GameSettings>(() => loadSettingsFromDevice());
+  const [progress, setProgress] = useState<PlayerProgress>(() => loadProgressFromDevice());
+  const [ghostLaps, setGhostLaps] = useState<{ [trackId: string]: TrackGhostLap }>(() =>
+    loadGhostsFromDevice()
+  );
   const ghostLapsRef = useRef<{ [trackId: string]: TrackGhostLap }>(ghostLaps);
 
-  // Player persistent progress (with safe defaults for migrating saved v1 state)
-  const [progress, setProgress] = useState<PlayerProgress>(() => {
-    const defaults: PlayerProgress = {
-      coins: 150,
-      selectedCarId: 'apex_gt',
-      unlockedCarIds: ['apex_gt'],
-      upgrades: {
-        apex_gt: { engine: 0, handling: 0, nitro: 0 },
-      },
-      unlockedTrackIds: ['sunset_coast'],
-      unlockedPerks: ['none', 'coin_magnet'],
-      equippedPerk: 'coin_magnet',
-      winStreak: 0,
-      missions: INITIAL_MISSIONS,
-      bestLapTimes: {},
-      bestRanks: {},
-    };
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        return {
-          ...defaults,
-          ...parsed,
-          unlockedPerks: parsed.unlockedPerks || defaults.unlockedPerks,
-          equippedPerk: parsed.equippedPerk || defaults.equippedPerk,
-          winStreak: typeof parsed.winStreak === 'number' ? parsed.winStreak : 0,
-          missions: Array.isArray(parsed.missions) && parsed.missions.length > 0 ? parsed.missions : defaults.missions,
-        };
-      }
-    } catch {
-      // Ignore
-    }
-    return defaults;
-  });
+  const [lastRacePrize, setLastRacePrize] = useState<number>(0);
+  const [lastChampPoints, setLastChampPoints] = useState<number>(0);
+  const [newlyUnlockedTrackName, setNewlyUnlockedTrackName] = useState<string | null>(null);
 
-  // Save progress
+  const selectedTrack =
+    TRACKS.find((t) => t.id === settings.selectedTrackId) || TRACKS[0];
+  const opponentCount = settings.opponentCount;
+  const raceMode = settings.raceMode;
+  const weather = settings.weather;
+  const aiDifficulty = settings.aiDifficulty;
+  const isMuted = settings.isMuted;
+  const steeringSensitivity = settings.steeringSensitivity;
+  const autoDriftAssist = settings.autoDriftAssist;
+  const cameraZoom = settings.cameraZoom;
+  const raceAgainstGhost = settings.raceAgainstGhost;
+  const hapticsEnabled = settings.hapticsEnabled;
+  const showMinimap = settings.showMinimap;
+
+  const updateSettings = (patch: Partial<GameSettings>) => {
+    setSettings((prev) => ({ ...prev, ...patch }));
+  };
+
+  // Sync audio mute state from saved device settings on mount & updates
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(progress));
-    } catch {
-      // Ignore
-    }
+    sound.setMuted(settings.isMuted);
+    saveSettingsToDevice(settings);
+  }, [settings]);
+
+  // Permanently save progress on device (localStorage + IndexedDB mirror)
+  useEffect(() => {
+    saveProgressToDevice(progress);
   }, [progress]);
 
   // Keep ghostLaps ref synced and persisted
   useEffect(() => {
     ghostLapsRef.current = ghostLaps;
-    try {
-      localStorage.setItem(GHOST_STORAGE_KEY, JSON.stringify(ghostLaps));
-    } catch {
-      // Ignore
-    }
+    saveGhostsToDevice(ghostLaps);
   }, [ghostLaps]);
 
   // Sync document body state
@@ -170,7 +152,7 @@ export default function App() {
   // Canvas and simulation references
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<GameRenderer | null>(null);
-  const bakedTrackRef = useRef<BakedTrack>(bakeTrack(TRACKS[0].points));
+  const bakedTrackRef = useRef<BakedTrack>(bakeTrack(selectedTrack.points));
 
   // Race Replay Recording & Playback State
   const replayDataRef = useRef<RaceReplayData | null>(null);
@@ -229,6 +211,7 @@ export default function App() {
     keyLeft: boolean;
     keyRight: boolean;
     touchActive: boolean;
+    touchMoved: boolean;
     touchStartX: number;
     touchX: number;
     touchY: number;
@@ -259,6 +242,7 @@ export default function App() {
     keyLeft: false,
     keyRight: false,
     touchActive: false,
+    touchMoved: false,
     touchStartX: 0,
     touchX: 0,
     touchY: 0,
@@ -319,7 +303,11 @@ export default function App() {
     ghostDeltaSeconds: null,
   });
 
-  const activeCarStats = CARS.find((c) => c.id === progress.selectedCarId) || CARS[0];
+  const baseActiveCar = CARS.find((c) => c.id === progress.selectedCarId) || CARS[0];
+  const activeCarStats = resolveCarStatsWithPaint(
+    baseActiveCar,
+    progress.carPaintOverrides[baseActiveCar.id]
+  );
 
   // Helper to initialize car entities on the starting grid
   const initializeGrid = (
@@ -362,6 +350,7 @@ export default function App() {
       lapProgress: 0,
       totalDistance: 0,
       lastProgress: 0,
+      trackSampleIndex: 0,
       rank: 1,
       currentLapTime: 0,
       bestLapTime: 999,
@@ -378,12 +367,16 @@ export default function App() {
       barrierScrapeTimer: 0,
       nearMissCooldown: 0,
       invulnerableTimer: 0,
+      hazardCooldown: 0,
+      stuckTimer: 0,
       bumpVelocityX: 0,
       bumpVelocityY: 0,
       trailColor: effectivePlayerStats.primaryColor,
       skidPoints: [],
     };
     createdCars.push(playerEntity);
+
+    const diffMeta = AI_DIFFICULTIES.find((d) => d.id === aiDifficulty) || AI_DIFFICULTIES[1];
 
     for (let i = 0; i < actualRivalsCount; i++) {
       const rivalConfig = AI_RIVALS_POOL[i % AI_RIVALS_POOL.length];
@@ -401,8 +394,14 @@ export default function App() {
         tier: 1,
         cost: 0,
         unlocked: true,
-        baseTopSpeed: effectivePlayerStats.baseTopSpeed * (0.92 + Math.random() * 0.12),
-        baseAcceleration: effectivePlayerStats.baseAcceleration * (0.9 + Math.random() * 0.15),
+        baseTopSpeed:
+          effectivePlayerStats.baseTopSpeed *
+          diffMeta.speedScale *
+          (0.92 + Math.random() * 0.12),
+        baseAcceleration:
+          effectivePlayerStats.baseAcceleration *
+          diffMeta.accelScale *
+          (0.9 + Math.random() * 0.15),
         baseHandling: 3.1,
         baseDriftGrip: 0.88,
         baseNitroMultiplier: 1.4,
@@ -430,6 +429,7 @@ export default function App() {
         lapProgress: 0,
         totalDistance: -gridRow * 40,
         lastProgress: 0,
+        trackSampleIndex: gridSampleIdx,
         rank: i + 2,
         currentLapTime: 0,
         bestLapTime: 999,
@@ -448,6 +448,8 @@ export default function App() {
         aiPersonality: rivalConfig.personality as AIPersonality,
         aiTargetLane: gridCol * 0.5,
         invulnerableTimer: 0,
+        hazardCooldown: 0,
+        stuckTimer: 0,
         bumpVelocityX: 0,
         bumpVelocityY: 0,
         trailColor: aiCarStats.primaryColor,
@@ -513,19 +515,19 @@ export default function App() {
   };
 
   // Start Race
-  const startRace = () => {
+  const startRace = (trackOverride?: TrackDefinition) => {
+    const trackToUse = trackOverride || selectedTrack;
     sound.resume();
     sound.startEngine();
     setSavedReplay(null);
-    initializeGrid(selectedTrack, opponentCount, raceAgainstGhost);
+    initializeGrid(trackToUse, opponentCount, raceAgainstGhost);
     setGameState('playing');
   };
 
   // Start 1v1 Ghost Duel directly for a chosen track
   const startGhostRace = (targetTrack?: TrackDefinition) => {
     const trackToUse = targetTrack || selectedTrack;
-    setSelectedTrack(trackToUse);
-    setRaceAgainstGhost(true);
+    updateSettings({ selectedTrackId: trackToUse.id, raceAgainstGhost: true });
     sound.resume();
     sound.startEngine();
     setSavedReplay(null);
@@ -557,7 +559,7 @@ export default function App() {
 
       if (e.code === 'KeyM') {
         const nextMute = sound.toggleMute();
-        setIsMuted(nextMute);
+        updateSettings({ isMuted: nextMute });
         return;
       }
 
@@ -603,17 +605,27 @@ export default function App() {
       simState.current.keyLeft = false;
       simState.current.keyRight = false;
       simState.current.touchActive = false;
+      simState.current.touchMoved = false;
       simState.current.steerInput = 0;
+    };
+
+    const handleGlobalPointerUp = () => {
+      simState.current.touchActive = false;
+      simState.current.touchMoved = false;
     };
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     window.addEventListener('blur', handleBlur);
+    window.addEventListener('pointerup', handleGlobalPointerUp);
+    window.addEventListener('pointercancel', handleGlobalPointerUp);
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleBlur);
+      window.removeEventListener('pointerup', handleGlobalPointerUp);
+      window.removeEventListener('pointercancel', handleGlobalPointerUp);
     };
   }, [gameState, selectedTrack, opponentCount, progress.equippedPerk, savedReplay]);
 
@@ -884,7 +896,7 @@ export default function App() {
         if (rendererRef.current) rendererRef.current.screenShake = 0.4;
         spawnNotification('ROCKET START!', playerCar.x, playerCar.y - 40, '#38bdf8', '+100 CR BONUS');
         simState.current.coinsCollectedThisRace += 100;
-        if (navigator.vibrate) navigator.vibrate([30, 20, 30]);
+        if (hapticsEnabled && navigator.vibrate) navigator.vibrate([30, 20, 30]);
       }
     }
 
@@ -923,18 +935,33 @@ export default function App() {
       }
     }
 
-    // 1. Process 1-Finger Steering and Keyboard inputs for player
+    // 1. Process 1-Finger Steering (Adaptive Sliding Anchor + Left/Right Hold) & Keyboard inputs
     let targetSteer = 0;
     if (simState.current.keyLeft) targetSteer -= 1;
     if (simState.current.keyRight) targetSteer += 1;
 
     if (simState.current.touchActive) {
-      const deltaX = simState.current.touchX - simState.current.touchStartX;
-      const maxDragDistance = 90 / steeringSensitivity;
-      targetSteer = Math.max(-1, Math.min(1, deltaX / maxDragDistance));
+      const maxDragDistance = 75 / steeringSensitivity;
+      if (simState.current.touchMoved) {
+        // Adaptive sliding anchor: reversing direction only takes a short flick back
+        const rawDelta = simState.current.touchX - simState.current.touchStartX;
+        if (rawDelta > maxDragDistance) {
+          simState.current.touchStartX = simState.current.touchX - maxDragDistance;
+        } else if (rawDelta < -maxDragDistance) {
+          simState.current.touchStartX = simState.current.touchX + maxDragDistance;
+        }
+        const deltaX = simState.current.touchX - simState.current.touchStartX;
+        targetSteer = Math.max(-1, Math.min(1, deltaX / maxDragDistance));
+      } else {
+        // Hold left or right side of the screen without dragging for effortless thumb control
+        const screenW = window.innerWidth || 1;
+        const normX = simState.current.touchX / screenW;
+        if (normX < 0.36) targetSteer = -0.75;
+        else if (normX > 0.64) targetSteer = 0.75;
+      }
     }
 
-    simState.current.steerInput += (targetSteer - simState.current.steerInput) * 16 * dt;
+    simState.current.steerInput += (targetSteer - simState.current.steerInput) * Math.min(1, 18 * dt);
 
     if (isRacing) {
       updateSmoothSteering(
@@ -943,7 +970,8 @@ export default function App() {
         baked,
         dt,
         steeringSensitivity,
-        autoDriftAssist
+        autoDriftAssist,
+        track.roadWidth
       );
     }
 
@@ -952,6 +980,9 @@ export default function App() {
       const weatherChargeBonus = weather === 'rain' ? 1.2 : 1.0;
       const turboResult = updateDriftAndMiniTurbo(playerCar, dt, weatherChargeBonus);
       if (turboResult.miniTurboFired) {
+        if (equippedPerk === 'apex_overdrive') {
+          playerCar.miniTurboBoostTimer *= 1.45;
+        }
         simState.current.miniTurbosThisRace += 1;
         sound.playMiniTurbo(turboResult.level === 2 ? 2 : 1);
         if (rendererRef.current) rendererRef.current.screenShake = 0.3;
@@ -964,7 +995,7 @@ export default function App() {
           turboResult.level === 2 ? '#d946ef' : '#06b6d4',
           `+${prize} CR`
         );
-        if (navigator.vibrate) navigator.vibrate([20, 10, 20]);
+        if (hapticsEnabled && navigator.vibrate) navigator.vibrate([20, 10, 20]);
       }
     }
 
@@ -1007,6 +1038,7 @@ export default function App() {
       if (car.miniTurboBoostTimer > 0) car.miniTurboBoostTimer -= dt;
       if (car.barrierScrapeTimer > 0) car.barrierScrapeTimer -= dt;
       if (car.nearMissCooldown > 0) car.nearMissCooldown -= dt;
+      if ((car.hazardCooldown ?? 0) > 0) car.hazardCooldown = Math.max(0, (car.hazardCooldown ?? 0) - dt);
       if (car.aiEmote && car.aiEmote.timer > 0) car.aiEmote.timer -= dt;
 
       if (car.nitroActive) {
@@ -1082,7 +1114,7 @@ export default function App() {
       if (barrierResult.collided && car.isPlayer) {
         sound.playBarrierScrape();
         if (rendererRef.current) rendererRef.current.screenShake = 0.2;
-        if (navigator.vibrate) navigator.vibrate(15);
+        if (hapticsEnabled && navigator.vibrate) navigator.vibrate(15);
 
         for (let s = 0; s < 3; s++) {
           particles.push({
@@ -1116,9 +1148,33 @@ export default function App() {
         });
       }
 
-      const trackLoc = findNearestTrackSample(car.x, car.y, baked);
+      const trackLoc = findNearestTrackSample(car.x, car.y, baked, car.trackSampleIndex);
+      car.trackSampleIndex = trackLoc.index;
       const currentTrackIndex = trackLoc.index;
       const progressT = currentTrackIndex / baked.samples.length;
+
+      // Auto-recovery stuck guard: guarantees neither player nor AI can stall on barriers or pileups
+      if (isRacing) {
+        if (car.speed < car.carStats.baseTopSpeed * 0.35) {
+          car.stuckTimer = (car.stuckTimer ?? 0) + dt;
+          if (car.stuckTimer > 0.35) {
+            const fixDiff = Math.atan2(
+              Math.sin(trackLoc.sample.angle - car.angle),
+              Math.cos(trackLoc.sample.angle - car.angle)
+            );
+            car.angle += fixDiff * 0.85;
+            const recenteredLateral = trackLoc.lateralDist * 0.85;
+            car.x = trackLoc.sample.x + trackLoc.sample.nx * recenteredLateral;
+            car.y = trackLoc.sample.y + trackLoc.sample.ny * recenteredLateral;
+            car.bumpVelocityX = 0;
+            car.bumpVelocityY = 0;
+            car.speed = Math.max(car.speed, car.carStats.baseTopSpeed * 0.58);
+            car.stuckTimer = 0;
+          }
+        } else {
+          car.stuckTimer = 0;
+        }
+      }
 
       if (car.lastProgress > 0.85 && progressT < 0.15) {
         const completedLapTime = car.currentLapTime;
@@ -1253,7 +1309,7 @@ export default function App() {
               ? `NEAR MISS! x${simState.current.comboCount} COMBO`
               : `NEAR MISS! +${reward} CR`;
           spawnNotification(text, playerCar.x, playerCar.y - 30, '#facc15');
-          if (navigator.vibrate) navigator.vibrate(15);
+          if (hapticsEnabled && navigator.vibrate) navigator.vibrate(15);
         }
       }
     }
@@ -1292,7 +1348,7 @@ export default function App() {
           if (carA.isPlayer || carB.isPlayer) {
             sound.playBump();
             if (rendererRef.current) rendererRef.current.screenShake = 0.25;
-            if (navigator.vibrate) navigator.vibrate(20);
+            if (hapticsEnabled && navigator.vibrate) navigator.vibrate(20);
 
             if (equippedPerk === 'ram_shield') {
               playerCar.speed = Math.max(prevPlayerSpeed, playerCar.carStats.baseTopSpeed * 1.1);
@@ -1343,13 +1399,36 @@ export default function App() {
       }
     }
 
-    // Hazards (Oil slicks)
-    for (const hazard of track.hazards) {
-      const dist = Math.hypot(playerCar.x - hazard.x, playerCar.y - hazard.y);
-      if (dist < hazard.radius) {
-        playerCar.steerAngle += (Math.random() - 0.5) * 0.8;
-        playerCar.speed = Math.max(80, playerCar.speed * 0.92);
-        sound.playDriftScreech();
+    // Hazards (Oil slicks, cones, barriers — single cooldown-guarded impulse so car never gets stuck)
+    if ((playerCar.hazardCooldown ?? 0) <= 0) {
+      for (const hazard of track.hazards) {
+        const dx = playerCar.x - hazard.x;
+        const dy = playerCar.y - hazard.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < hazard.radius) {
+          playerCar.hazardCooldown = 1.1;
+          if (hazard.type === 'oil') {
+            playerCar.steerAngle += (Math.random() < 0.5 ? -1 : 1) * 0.22;
+            playerCar.speed = Math.max(
+              playerCar.carStats.baseTopSpeed * 0.65,
+              playerCar.speed * 0.88
+            );
+          } else {
+            // Deflect cleanly around cones & track barriers instead of trapping inside them
+            const nx = dist > 0.01 ? dx / dist : Math.cos(playerCar.angle + Math.PI * 0.5);
+            const ny = dist > 0.01 ? dy / dist : Math.sin(playerCar.angle + Math.PI * 0.5);
+            playerCar.x = hazard.x + nx * (hazard.radius + 6);
+            playerCar.y = hazard.y + ny * (hazard.radius + 6);
+            playerCar.bumpVelocityX += nx * 85;
+            playerCar.bumpVelocityY += ny * 85;
+            playerCar.speed = Math.max(
+              playerCar.carStats.baseTopSpeed * 0.6,
+              playerCar.speed * 0.85
+            );
+          }
+          sound.playDriftScreech();
+          break;
+        }
       }
     }
 
@@ -1415,27 +1494,35 @@ export default function App() {
         ? 60
         : 25;
 
+    const diffMeta = AI_DIFFICULTIES.find((d) => d.id === aiDifficulty) || AI_DIFFICULTIES[1];
     const streakMultiplier = Math.min(2.0, 1 + progress.winStreak * 0.25);
-    const totalPrize = Math.round((coinsCollected + driftBonus + winBonus) * streakMultiplier);
+    const totalPrize = Math.round(
+      (coinsCollected + driftBonus + winBonus) * streakMultiplier * diffMeta.prizeMultiplier
+    );
     setLastRacePrize(totalPrize);
+
+    const earnedChampPts = getChampionshipPointsForRank(player.rank, player.isEliminated);
+    setLastChampPoints(earnedChampPts);
 
     const nearMissesDelta = simState.current.nearMissesThisRace;
     const miniTurbosDelta = simState.current.miniTurbosThisRace;
     const driftDelta = simState.current.driftPointsThisRace;
-    const winDelta = player.rank === 1 ? 1 : 0;
+    const winDelta = player.rank === 1 && !player.isEliminated ? 1 : 0;
+
+    // Preview newly unlocked track cleanly for the modal
+    const prevUnlocked = progress.unlockedTrackIds;
+    const isPodium = !player.isEliminated && player.rank <= 3;
+    const trackIdx = TRACKS.findIndex((t) => t.id === selectedTrack.id);
+    const candidateNextTrack =
+      trackIdx >= 0 && trackIdx + 1 < TRACKS.length ? TRACKS[trackIdx + 1] : null;
+    const willUnlockNext =
+      isPodium &&
+      (!simState.current.isGhostDuel || player.rank === 1) &&
+      candidateNextTrack &&
+      !prevUnlocked.includes(candidateNextTrack.id);
+    setNewlyUnlockedTrackName(willUnlockNext ? candidateNextTrack.name : null);
 
     setProgress((prev) => {
-      const updatedBestLap = Math.min(
-        player.bestLapTime,
-        prev.bestLapTimes[selectedTrack.id] || 999
-      );
-      const updatedRank = Math.min(
-        player.rank,
-        prev.bestRanks[selectedTrack.id] || 99
-      );
-
-      const nextStreak = player.rank <= 3 && !player.isEliminated ? prev.winStreak + 1 : 0;
-
       const updatedMissions = updateMissionProgress(prev.missions, {
         near_misses: nearMissesDelta,
         mini_turbos: miniTurbosDelta,
@@ -1444,20 +1531,20 @@ export default function App() {
         drift_points: driftDelta,
       });
 
-      return {
-        ...prev,
-        coins: prev.coins + totalPrize,
-        winStreak: nextStreak,
-        missions: updatedMissions,
-        bestLapTimes: {
-          ...prev.bestLapTimes,
-          [selectedTrack.id]: updatedBestLap,
-        },
-        bestRanks: {
-          ...prev.bestRanks,
-          [selectedTrack.id]: updatedRank,
-        },
-      };
+      const { nextProgress } = applyRaceCompletionToProgress(
+        { ...prev, missions: updatedMissions },
+        {
+          trackId: selectedTrack.id,
+          rank: player.rank,
+          isEliminated: !!player.isEliminated,
+          bestLapTime: player.bestLapTime,
+          finishTime: player.finishTime,
+          totalPrize,
+          driftPoints: driftDelta,
+          isGhostDuel: simState.current.isGhostDuel,
+        }
+      );
+      return nextProgress;
     });
 
     if (replayDataRef.current) {
@@ -1600,6 +1687,7 @@ export default function App() {
   const handlePointerDown = (e: React.PointerEvent) => {
     if (gameState !== 'playing') return;
     simState.current.touchActive = true;
+    simState.current.touchMoved = false;
     simState.current.touchStartX = e.clientX;
     simState.current.touchX = e.clientX;
     simState.current.touchY = e.clientY;
@@ -1609,23 +1697,64 @@ export default function App() {
     if (!simState.current.touchActive) return;
     simState.current.touchX = e.clientX;
     simState.current.touchY = e.clientY;
+    if (Math.abs(e.clientX - simState.current.touchStartX) > 6) {
+      simState.current.touchMoved = true;
+    }
   };
 
   const handlePointerUp = () => {
     simState.current.touchActive = false;
-    simState.current.steerInput = 0;
+    simState.current.touchMoved = false;
   };
 
   const handleNextTrack = () => {
-    const currentIndex = TRACKS.findIndex((t) => t.id === selectedTrack.id);
-    const nextTrack = TRACKS[(currentIndex + 1) % TRACKS.length];
-    setSelectedTrack(nextTrack);
-    startRace();
+    const unlockedTracks = TRACKS.filter((t) => progress.unlockedTrackIds.includes(t.id));
+    const pool = unlockedTracks.length > 0 ? unlockedTracks : [TRACKS[0]];
+    const currentIndex = pool.findIndex((t) => t.id === selectedTrack.id);
+    const nextTrack = pool[(currentIndex + 1) % pool.length];
+    updateSettings({ selectedTrackId: nextTrack.id });
+    startRace(nextTrack);
+  };
+
+  const handleClaimDailyBonus = () => {
+    const result = claimDailyBonus(progress);
+    if (result.claimed) {
+      setProgress(result.progress);
+      sound.playLapChime();
+    }
+  };
+
+  const handleExportSave = () => {
+    const bundle = createOfflineSaveBundle(progress, settings, ghostLaps);
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `apex-one-touch-save-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const handleImportSave = (jsonText: string): boolean => {
+    const bundle = parseOfflineSaveBundle(jsonText);
+    if (!bundle) return false;
+    setProgress(bundle.progress);
+    setSettings(bundle.settings);
+    setGhostLaps(bundle.ghostLaps);
+    return true;
+  };
+
+  const handleResetSave = () => {
+    setProgress(createDefaultProgress());
+    setSettings(createDefaultSettings());
+    setGhostLaps({});
   };
 
   const claimableMissionsCount = progress.missions.filter(
     (m) => !m.claimed && m.progress >= m.target
   ).length;
+  const dailyBonusAvailable = canClaimDailyBonus(progress);
+  const dailyBonusAmount = getNextDailyBonusReward(progress);
 
   return (
     <div
@@ -1641,7 +1770,7 @@ export default function App() {
       {/* Title Screen */}
       {gameState === 'title' && (
         <TitleScreen
-          onStartRace={startRace}
+          onStartRace={() => startRace()}
           onOpenLevelSelect={() => setGameState('level_select')}
           onOpenGarage={() => setGameState('garage')}
           onOpenFeatures={(tab = 'modes') => {
@@ -1649,20 +1778,25 @@ export default function App() {
             setGameState('features');
           }}
           opponentCount={opponentCount}
-          onSetOpponentCount={(c) => setOpponentCount(c)}
+          onSetOpponentCount={(c) => updateSettings({ opponentCount: c })}
           raceMode={raceMode}
-          onSetRaceMode={(m) => setRaceMode(m)}
+          onSetRaceMode={(m) => updateSettings({ raceMode: m })}
+          aiDifficulty={aiDifficulty}
           equippedPerk={progress.equippedPerk}
           weather={weather}
           winStreak={progress.winStreak}
+          trophies={progress.championship.trophies}
           claimableMissionsCount={claimableMissionsCount}
+          canClaimDaily={dailyBonusAvailable}
+          dailyRewardAmount={dailyBonusAmount}
+          onClaimDaily={handleClaimDailyBonus}
           selectedTrack={selectedTrack}
           selectedCar={activeCarStats}
           coins={progress.coins}
           isMuted={isMuted}
           onToggleMute={() => {
             const m = sound.toggleMute();
-            setIsMuted(m);
+            updateSettings({ isMuted: m });
           }}
         />
       )}
@@ -1681,7 +1815,7 @@ export default function App() {
           isMuted={isMuted}
           onToggleMute={() => {
             const m = sound.toggleMute();
-            setIsMuted(m);
+            updateSettings({ isMuted: m });
           }}
           onTriggerNitro={triggerNitro}
           steerInput={hudState.steerInput}
@@ -1699,6 +1833,7 @@ export default function App() {
           ghostDeltaSeconds={hudState.ghostDeltaSeconds}
           ghostBestLapTime={simState.current.activeGhostLap?.lapTime ?? null}
           isGhostDuel={simState.current.isGhostDuel}
+          showMinimap={showMinimap}
         />
       )}
 
@@ -1707,10 +1842,13 @@ export default function App() {
         <FeaturesMenuModal
           initialTab={featuresTab}
           progress={progress}
+          ghostLaps={ghostLaps}
           raceMode={raceMode}
-          onSetRaceMode={(m) => setRaceMode(m)}
+          onSetRaceMode={(m) => updateSettings({ raceMode: m })}
+          aiDifficulty={aiDifficulty}
+          onSetAiDifficulty={(d: AIDifficulty) => updateSettings({ aiDifficulty: d })}
           weather={weather}
-          onSetWeather={(w) => setWeather(w)}
+          onSetWeather={(w) => updateSettings({ weather: w })}
           onEquipPerk={(perkId: RacePerkId) => {
             setProgress((prev) => ({ ...prev, equippedPerk: perkId }));
           }}
@@ -1732,16 +1870,35 @@ export default function App() {
               ...prev,
               coins: prev.coins + targetMission.reward,
               missions: rotateClaimedMission(prev.missions, missionId),
+              championship: {
+                ...prev.championship,
+                totalCoinsEarned: prev.championship.totalCoinsEarned + targetMission.reward,
+              },
             }));
             sound.playLapChime();
           }}
+          canClaimDaily={dailyBonusAvailable}
+          dailyRewardAmount={dailyBonusAmount}
+          onClaimDaily={handleClaimDailyBonus}
           steeringSensitivity={steeringSensitivity}
-          onSetSteeringSensitivity={(val) => setSteeringSensitivity(val)}
+          onSetSteeringSensitivity={(val) => updateSettings({ steeringSensitivity: val })}
           autoDriftAssist={autoDriftAssist}
-          onSetAutoDriftAssist={(val) => setAutoDriftAssist(val)}
+          onSetAutoDriftAssist={(val) => updateSettings({ autoDriftAssist: val })}
           cameraZoom={cameraZoom}
-          onSetCameraZoom={(val) => setCameraZoom(val)}
-          onStartRace={startRace}
+          onSetCameraZoom={(val) => updateSettings({ cameraZoom: val })}
+          hapticsEnabled={hapticsEnabled}
+          onSetHapticsEnabled={(val) => updateSettings({ hapticsEnabled: val })}
+          showMinimap={showMinimap}
+          onSetShowMinimap={(val) => updateSettings({ showMinimap: val })}
+          isMuted={isMuted}
+          onToggleMute={() => {
+            const m = sound.toggleMute();
+            updateSettings({ isMuted: m });
+          }}
+          onExportSave={handleExportSave}
+          onImportSave={handleImportSave}
+          onResetSave={handleResetSave}
+          onStartRace={() => startRace()}
           onClose={() => setGameState('title')}
         />
       )}
@@ -1750,15 +1907,31 @@ export default function App() {
       {gameState === 'level_select' && (
         <LevelSelectModal
           currentTrackId={selectedTrack.id}
-          onSelectTrack={(t) => setSelectedTrack(t)}
+          onSelectTrack={(t) => updateSettings({ selectedTrackId: t.id })}
+          unlockedTrackIds={progress.unlockedTrackIds}
+          coins={progress.coins}
+          onUnlockTrack={(trackId, cost) => {
+            if (progress.coins >= cost && !progress.unlockedTrackIds.includes(trackId)) {
+              setProgress((prev) => ({
+                ...prev,
+                coins: prev.coins - cost,
+                unlockedTrackIds: [...prev.unlockedTrackIds, trackId],
+              }));
+              updateSettings({ selectedTrackId: trackId });
+              sound.playCoin();
+            }
+          }}
           opponentCount={opponentCount}
-          onSetOpponentCount={(c) => setOpponentCount(c)}
+          onSetOpponentCount={(c) => updateSettings({ opponentCount: c })}
           raceAgainstGhost={raceAgainstGhost}
-          onToggleRaceAgainstGhost={(enabled) => setRaceAgainstGhost(enabled)}
+          onToggleRaceAgainstGhost={(enabled) => updateSettings({ raceAgainstGhost: enabled })}
           onLaunchGhostRace={(t) => startGhostRace(t)}
           onClose={() => setGameState('title')}
-          onStartRace={startRace}
+          onStartRace={() => startRace()}
           bestLapTimes={progress.bestLapTimes}
+          bestRaceTimes={progress.bestRaceTimes}
+          bestRanks={progress.bestRanks}
+          championship={progress.championship}
           ghostLaps={ghostLaps}
         />
       )}
@@ -1804,6 +1977,15 @@ export default function App() {
               sound.playCoin();
             }
           }}
+          onSelectCarLivery={(carId, liveryId) => {
+            setProgress((prev) => ({
+              ...prev,
+              carPaintOverrides: {
+                ...prev.carPaintOverrides,
+                [carId]: liveryId,
+              },
+            }));
+          }}
           onClose={() => setGameState('title')}
         />
       )}
@@ -1812,7 +1994,7 @@ export default function App() {
       {gameState === 'paused' && (
         <PauseModal
           onResume={() => setGameState('playing')}
-          onRestart={startRace}
+          onRestart={() => startRace()}
           onReturnToMenu={() => {
             sound.stopEngine();
             setGameState('title');
@@ -1820,14 +2002,16 @@ export default function App() {
           isMuted={isMuted}
           onToggleMute={() => {
             const m = sound.toggleMute();
-            setIsMuted(m);
+            updateSettings({ isMuted: m });
           }}
           steeringSensitivity={steeringSensitivity}
-          onSetSteeringSensitivity={(s) => setSteeringSensitivity(s)}
+          onSetSteeringSensitivity={(s) => updateSettings({ steeringSensitivity: s })}
           autoDriftAssist={autoDriftAssist}
-          onSetAutoDriftAssist={(val) => setAutoDriftAssist(val)}
+          onSetAutoDriftAssist={(val) => updateSettings({ autoDriftAssist: val })}
           cameraZoom={cameraZoom}
-          onSetCameraZoom={(val) => setCameraZoom(val)}
+          onSetCameraZoom={(val) => updateSettings({ cameraZoom: val })}
+          showMinimap={showMinimap}
+          onSetShowMinimap={(val) => updateSettings({ showMinimap: val })}
         />
       )}
 
@@ -1843,9 +2027,11 @@ export default function App() {
           track={selectedTrack}
           raceMode={raceMode}
           coinsEarned={lastRacePrize}
+          championshipPointsEarned={lastChampPoints}
+          newlyUnlockedTrackName={newlyUnlockedTrackName}
           hasReplay={!!savedReplay && savedReplay.frames.length > 1}
           onWatchReplay={handleWatchReplay}
-          onRestartRace={startRace}
+          onRestartRace={() => startRace()}
           onNextTrack={handleNextTrack}
           onReturnToMenu={() => setGameState('title')}
         />

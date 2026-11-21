@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Apex 1-Touch Racing</string>
+    <string name="title_activity_main">Apex 1-Touch Racing</string>
+    <string name="package_name">com.apexracing.onetouch</string>
+    <string name="custom_url_scheme">com.apexracing.onetouch</string>
+</resources>

@@ -88,9 +88,9 @@ export function findNearestTrackSample(
   let bestIdx = 0;
   let bestDistSq = Infinity;
 
-  // If hint index is given, search in local neighborhood first for 60fps performance
+  // If hint index is given, search in local neighborhood first for 60fps performance and hairpin safety
   if (hintIndex !== undefined && hintIndex >= 0) {
-    const window = 40;
+    const window = 45;
     for (let offset = -window; offset <= window; offset++) {
       const idx = (hintIndex + offset + count) % count;
       const s = samples[idx];
@@ -100,10 +100,9 @@ export function findNearestTrackSample(
         bestIdx = idx;
       }
     }
-    // If close enough, return
-    if (bestDistSq < 40000) {
+    // Stay locked to the local spline branch within 300px so hairpins/crossings cannot snap erratically
+    if (bestDistSq < 90000) {
       const bestSample = samples[bestIdx];
-      // Lateral distance: dot product with track normal
       const lateralDist = (x - bestSample.x) * bestSample.nx + (y - bestSample.y) * bestSample.ny;
       return { index: bestIdx, sample: bestSample, distSq: bestDistSq, lateralDist };
     }
@@ -186,59 +185,55 @@ export function checkDrafting(
   return Math.abs(angleDiff) < maxAngleSpread;
 }
 
-// Collision resolution between two cars (elastic impulse)
+// Collision resolution between two cars (smooth separation without velocity lock or stalls)
 export function resolveCarCollision(
   carA: CarEntity,
   carB: CarEntity,
-  hitRadius: number = 24
+  hitRadius: number = 22
 ): boolean {
   const dx = carB.x - carA.x;
   const dy = carB.y - carA.y;
   const dist = Math.hypot(dx, dy);
   const minDist = hitRadius * 2;
 
-  if (dist >= minDist || dist === 0) return false;
+  if (dist >= minDist) return false;
 
-  // Overlap amount
+  // Fallback separation direction if centers match exactly
+  const nx = dist > 0.001 ? dx / dist : Math.cos(carA.angle + Math.PI * 0.5);
+  const ny = dist > 0.001 ? dy / dist : Math.sin(carA.angle + Math.PI * 0.5);
+
+  // Push cleanly apart so cars never stay wedged together
   const overlap = minDist - dist;
-  const nx = dx / dist;
-  const ny = dy / dist;
+  carA.x -= nx * overlap * 0.55;
+  carA.y -= ny * overlap * 0.55;
+  carB.x += nx * overlap * 0.55;
+  carB.y += ny * overlap * 0.55;
 
-  // Push apart
-  carA.x -= nx * overlap * 0.5;
-  carA.y -= ny * overlap * 0.5;
-  carB.x += nx * overlap * 0.5;
-  carB.y += ny * overlap * 0.5;
-
-  // Relative velocity
+  // Apply gentle lateral bump separation through persistent bumpVelocity (never stalling forward momentum)
   const rvx = carB.vx - carA.vx;
   const rvy = carB.vy - carA.vy;
   const velAlongNormal = rvx * nx + rvy * ny;
 
-  // Only bounce if moving towards each other
   if (velAlongNormal < 0) {
-    const restitution = 0.6; // elastic bounce
-    const impulseMag = -(1 + restitution) * velAlongNormal * 0.5;
+    const impulseMag = Math.min(110, Math.max(28, -velAlongNormal * 0.45));
+    carA.bumpVelocityX = Math.max(-140, Math.min(140, carA.bumpVelocityX - nx * impulseMag));
+    carA.bumpVelocityY = Math.max(-140, Math.min(140, carA.bumpVelocityY - ny * impulseMag));
+    carB.bumpVelocityX = Math.max(-140, Math.min(140, carB.bumpVelocityX + nx * impulseMag));
+    carB.bumpVelocityY = Math.max(-140, Math.min(140, carB.bumpVelocityY + ny * impulseMag));
 
-    const ix = nx * impulseMag;
-    const iy = ny * impulseMag;
+    // Gentle speed rub that preserves racing momentum (never grinds down to a stop)
+    const minRubSpeedA = carA.carStats.baseTopSpeed * 0.55;
+    const minRubSpeedB = carB.carStats.baseTopSpeed * 0.55;
+    carA.speed = Math.max(carA.speed * 0.96, Math.min(carA.speed, minRubSpeedA));
+    carB.speed = Math.max(carB.speed * 0.96, Math.min(carB.speed, minRubSpeedB));
 
-    carA.vx -= ix;
-    carA.vy -= iy;
-    carB.vx += ix;
-    carB.vy += iy;
-
-    // Small speed dampening on collision
-    carA.speed = Math.max(carA.speed * 0.85, 40);
-    carB.speed = Math.max(carB.speed * 0.85, 40);
-
-    return true; // collision occurred
+    return true;
   }
 
   return false;
 }
 
-// Road Constraint: Ensures cars (player and AI) CAN NEVER leave the asphalt road
+// Road Constraint: Ensures cars (player and AI) CAN NEVER leave the asphalt road and glide smoothly off walls
 export interface RoadConstraintResult {
   collided: boolean;
   side: 'left' | 'right' | null;
@@ -254,28 +249,40 @@ export function constrainCarToRoad(
   baked: BakedTrack,
   dt: number
 ): RoadConstraintResult {
-  const loc = findNearestTrackSample(car.x, car.y, baked);
+  const loc = findNearestTrackSample(car.x, car.y, baked, car.trackSampleIndex);
+  car.trackSampleIndex = loc.index;
   const halfRoad = roadWidth * 0.5;
   const carHalf = 13;
   const maxLateral = Math.max(15, halfRoad - carHalf);
 
   if (loc.lateralDist > maxLateral) {
-    // Hit right barrier
-    const clampedLateral = maxLateral;
+    // Hit right barrier: pull slightly inside so car glides cleanly off the rail
+    const clampedLateral = maxLateral - 0.5;
     car.x = loc.sample.x + loc.sample.nx * clampedLateral;
     car.y = loc.sample.y + loc.sample.ny * clampedLateral;
 
-    // Normal deflection (bounce gently back toward center)
-    const vn = car.vx * loc.sample.nx + car.vy * loc.sample.ny;
-    if (vn > 0) {
-      car.vx -= vn * 1.35;
-      car.vy -= vn * 1.35;
+    // Cancel any outward bump velocity pushing into the wall
+    const bumpOut = car.bumpVelocityX * loc.sample.nx + car.bumpVelocityY * loc.sample.ny;
+    if (bumpOut > 0) {
+      car.bumpVelocityX -= loc.sample.nx * bumpOut * 1.3;
+      car.bumpVelocityY -= loc.sample.ny * bumpOut * 1.3;
     }
-    // Smooth tangential redirection along track tangent
-    const angleDiff = Math.atan2(Math.sin(loc.sample.angle - car.angle), Math.cos(loc.sample.angle - car.angle));
-    car.angle += angleDiff * 6.0 * dt;
-    // Mild scrape friction (prevents flying off, keeps high momentum)
-    car.speed *= Math.max(0.92, 1 - 0.12 * dt);
+
+    // Check heading relative to track tangent: relAngle > 0 means pointing into right barrier
+    const relAngle = Math.atan2(
+      Math.sin(car.angle - loc.sample.angle),
+      Math.cos(car.angle - loc.sample.angle)
+    );
+    if (relAngle > -0.05) {
+      // Immediately align heading parallel/slightly inward so car glides off the rail on contact
+      car.angle = loc.sample.angle - 0.05;
+    }
+
+    // Mild scrape friction with high minimum glide speed so car never stalls against barriers
+    const wallMinSpeed = car.carStats.baseTopSpeed * 0.65;
+    if (car.speed > wallMinSpeed) {
+      car.speed = Math.max(wallMinSpeed, car.speed * Math.max(0.95, 1 - 0.12 * dt));
+    }
     car.barrierScrapeTimer = 0.2;
 
     return {
@@ -287,19 +294,30 @@ export function constrainCarToRoad(
       ny: loc.sample.ny,
     };
   } else if (loc.lateralDist < -maxLateral) {
-    // Hit left barrier
-    const clampedLateral = -maxLateral;
+    // Hit left barrier: pull slightly inside
+    const clampedLateral = -(maxLateral - 0.5);
     car.x = loc.sample.x + loc.sample.nx * clampedLateral;
     car.y = loc.sample.y + loc.sample.ny * clampedLateral;
 
-    const vn = car.vx * loc.sample.nx + car.vy * loc.sample.ny;
-    if (vn < 0) {
-      car.vx -= vn * 1.35;
-      car.vy -= vn * 1.35;
+    const bumpOut = car.bumpVelocityX * loc.sample.nx + car.bumpVelocityY * loc.sample.ny;
+    if (bumpOut < 0) {
+      car.bumpVelocityX -= loc.sample.nx * bumpOut * 1.3;
+      car.bumpVelocityY -= loc.sample.ny * bumpOut * 1.3;
     }
-    const angleDiff = Math.atan2(Math.sin(loc.sample.angle - car.angle), Math.cos(loc.sample.angle - car.angle));
-    car.angle += angleDiff * 6.0 * dt;
-    car.speed *= Math.max(0.92, 1 - 0.12 * dt);
+
+    // relAngle < 0 means pointing into left barrier
+    const relAngle = Math.atan2(
+      Math.sin(car.angle - loc.sample.angle),
+      Math.cos(car.angle - loc.sample.angle)
+    );
+    if (relAngle < 0.05) {
+      car.angle = loc.sample.angle + 0.05;
+    }
+
+    const wallMinSpeed = car.carStats.baseTopSpeed * 0.65;
+    if (car.speed > wallMinSpeed) {
+      car.speed = Math.max(wallMinSpeed, car.speed * Math.max(0.95, 1 - 0.12 * dt));
+    }
     car.barrierScrapeTimer = 0.2;
 
     return {
@@ -322,36 +340,52 @@ export function constrainCarToRoad(
   };
 }
 
-// Buttery smooth steering with progressive sensitivity and road-flow assistance
+// Buttery smooth steering with progressive sensitivity, road-flow assist, and edge cushion
 export function updateSmoothSteering(
   car: CarEntity,
   steerInput: number,
   baked: BakedTrack,
   dt: number,
   sensitivity: number = 1.0,
-  autoDriftAssist: boolean = true
+  autoDriftAssist: boolean = true,
+  roadWidth: number = 250
 ): void {
-  // Progressive curve: small touches give micro-adjustments, deep drags give full drift
+  // Progressive curve: gentle touches carve smoothly, full swipe initiates clean drift
   const sign = Math.sign(steerInput);
-  const curved = sign * Math.pow(Math.abs(steerInput), 1.15);
-  const targetSteerAngle = curved * 0.45 * sensitivity;
+  const curved = sign * Math.pow(Math.abs(steerInput), 1.1);
+  const targetSteerAngle = curved * 0.46 * sensitivity;
 
-  // Exponential smooth damping
-  car.steerAngle += (targetSteerAngle - car.steerAngle) * 16 * dt;
+  // Responsive exponential damping
+  car.steerAngle += (targetSteerAngle - car.steerAngle) * Math.min(1, 18 * dt);
 
-  // Road-flow curvature assist (stronger when autoDriftAssist is active; lighter in Pro Manual)
-  const sample = findNearestTrackSample(car.x, car.y, baked);
+  // Track-local sample lookup using hintIndex for stable flow around hairpins
+  const sample = findNearestTrackSample(car.x, car.y, baked, car.trackSampleIndex);
+  car.trackSampleIndex = sample.index;
+
   const trackTangentDiff = Math.atan2(
     Math.sin(sample.sample.angle - car.angle),
     Math.cos(sample.sample.angle - car.angle)
   );
-  const assistFactor = autoDriftAssist ? 1.0 : 0.32;
-  const roadAssistRate = Math.min(2.8, 1.2 + (car.speed / 400) * 1.5) * assistFactor;
+  const assistFactor = autoDriftAssist ? 1.0 : 0.35;
+  const roadAssistRate = Math.min(3.4, 1.45 + (car.speed / 400) * 1.7) * assistFactor;
   car.angle += trackTangentDiff * roadAssistRate * dt;
 
-  // Steering angular velocity (sharper manual turn authority when assist is off)
-  const manualTurnBoost = autoDriftAssist ? 1.0 : 1.18;
-  const turnRate = (car.steerAngle * car.carStats.baseHandling * 2.1 * manualTurnBoost) / (1 + car.speed * 0.001);
+  // Soft boundary cushion in Assist mode: gently steers away from walls before touching kerbs
+  if (autoDriftAssist) {
+    const safeHalf = Math.max(30, roadWidth * 0.5 - 16);
+    const edgeRatio = Math.abs(sample.lateralDist) / safeHalf;
+    if (edgeRatio > 0.68) {
+      const cushionStrength = Math.min(1, (edgeRatio - 0.68) / 0.32);
+      const inwardSign = sample.lateralDist > 0 ? -1 : 1;
+      car.angle += inwardSign * cushionStrength * 1.45 * dt;
+    }
+  }
+
+  // Smooth steering authority across low and high speeds
+  const manualTurnBoost = autoDriftAssist ? 1.0 : 1.2;
+  const turnRate =
+    (car.steerAngle * car.carStats.baseHandling * 2.25 * manualTurnBoost) /
+    (1 + car.speed * 0.00075);
   car.angle += turnRate * dt;
 }
 
@@ -361,16 +395,16 @@ export function updateDriftAndMiniTurbo(
   dt: number,
   chargeRateMultiplier: number = 1.0
 ): { miniTurboFired: boolean; level: 0 | 1 | 2 } {
-  const isHardTurn = Math.abs(car.steerAngle) > 0.18 && car.speed > 200;
+  const isHardTurn = Math.abs(car.steerAngle) > 0.15 && car.speed > 175;
 
   if (isHardTurn) {
     car.isDrifting = true;
     car.driftAngle += (car.steerAngle * 0.42 - car.driftAngle) * 8 * dt;
     car.driftDuration += dt * chargeRateMultiplier;
 
-    if (car.driftDuration >= 1.35) {
+    if (car.driftDuration >= 1.3) {
       car.miniTurboLevel = 2; // Purple Ultra Mini-Turbo
-    } else if (car.driftDuration >= 0.65) {
+    } else if (car.driftDuration >= 0.6) {
       car.miniTurboLevel = 1; // Cyan Mini-Turbo
     }
     return { miniTurboFired: false, level: 0 };
@@ -423,7 +457,8 @@ export function updateAICar(
   roadWidth: number,
   dt: number
 ): { steerInput: number; useNitro: boolean } {
-  const currentSample = findNearestTrackSample(ai.x, ai.y, baked);
+  const currentSample = findNearestTrackSample(ai.x, ai.y, baked, ai.trackSampleIndex);
+  ai.trackSampleIndex = currentSample.index;
   const sampleCount = baked.samples.length;
 
   // Lookahead distance scales with speed (anticipation)

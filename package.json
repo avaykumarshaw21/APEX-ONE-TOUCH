@@ -1,14 +1,21 @@
 {
-  "name": "react-example",
+  "name": "apex-one-touch-racing",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
+    "build:desktop": "BUILD_TARGET=desktop vite build",
+    "dist:win": "npm run build:desktop && electron-builder --win --config electron-builder.yml",
+    "cap:sync": "npm run build && npx cap sync",
+    "android:apk": "npm run build && npx cap sync android && cd android && ./gradlew assembleDebug",
+    "ios:prepare": "npm run build && npx cap sync ios",
     "preview": "vite preview",
-    "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "clean": "rm -rf dist release server.js",
+    "lint": "tsc --noEmit",
+    "test": "tsx --test src/game/*.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -23,11 +30,17 @@
     "motion": "^12.23.24"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/cli": "^8.6.2",
+    "@capacitor/core": "^8.6.2",
+    "@capacitor/ios": "^8.6.2",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
+    "electron": "^45.3.3",
+    "electron-builder": "^26.18.0",
     "esbuild": "^0.25.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",

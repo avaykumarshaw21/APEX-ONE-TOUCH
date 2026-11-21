@@ -1,6 +1,6 @@
 {
   "name": "Apex One-Touch Racing",
-  "description": "High-octane mobile car racing game controlled with a single finger. Compete against 4, 6, or 8 AI rivals across challenging championship tracks.",
+  "description": "Offline mobile & desktop car racing game controlled with one finger. Compete against 4, 6, or 8 AI rivals or Ghost laps across championship tracks.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": []
 }

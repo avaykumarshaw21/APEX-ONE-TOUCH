@@ -9,11 +9,53 @@ export type OpponentCount = 4 | 6 | 8;
 
 export type RaceMode = 'championship' | 'knockout' | 'drift_fever';
 
-export type RacePerkId = 'none' | 'coin_magnet' | 'twin_nitro' | 'ram_shield' | 'slipstream_pro';
+export type AIDifficulty = 'amateur' | 'pro' | 'ace';
+
+export type RacePerkId =
+  | 'none'
+  | 'coin_magnet'
+  | 'twin_nitro'
+  | 'ram_shield'
+  | 'slipstream_pro'
+  | 'apex_overdrive';
 
 export type TrackWeather = 'clear' | 'night' | 'rain';
 
 export type CameraZoomMode = 'normal' | 'wide';
+
+export interface CarLivery {
+  id: string;
+  name: string;
+  primaryColor: string;
+  secondaryColor: string;
+  accentColor: string;
+}
+
+export interface ChampionshipProgress {
+  points: number;
+  trophies: number;
+  completedTrackIds: string[];
+  totalRaces: number;
+  totalWins: number;
+  totalPodiums: number;
+  bestDriftScore: number;
+  totalCoinsEarned: number;
+}
+
+export interface GameSettings {
+  selectedTrackId: string;
+  opponentCount: OpponentCount;
+  raceMode: RaceMode;
+  weather: TrackWeather;
+  aiDifficulty: AIDifficulty;
+  isMuted: boolean;
+  steeringSensitivity: number;
+  autoDriftAssist: boolean;
+  cameraZoom: CameraZoomMode;
+  raceAgainstGhost: boolean;
+  hapticsEnabled: boolean;
+  showMinimap: boolean;
+}
 
 export interface RaceMission {
   id: string;
@@ -118,13 +160,20 @@ export interface PlayerProgress {
       nitro: number;     // 0 to 5
     };
   };
+  carPaintOverrides: {
+    [carId: string]: string; // CarLivery['id']
+  };
   unlockedTrackIds: string[];
   unlockedPerks: RacePerkId[];
   equippedPerk: RacePerkId;
   winStreak: number;
+  lastDailyClaimDate: string | null;
+  dailyStreak: number;
   missions: RaceMission[];
   bestLapTimes: { [trackId: string]: number };
+  bestRaceTimes: { [trackId: string]: number };
   bestRanks: { [trackId: string]: number };
+  championship: ChampionshipProgress;
 }
 
 export type AIPersonality = 'aggressive' | 'speedster' | 'drifter' | 'balanced';
@@ -152,6 +201,7 @@ export interface CarEntity {
   lapProgress: number; // 0 to 1 along track spline
   totalDistance: number;
   lastProgress: number;
+  trackSampleIndex?: number;
 
   // Race timing & status
   rank: number;
@@ -179,8 +229,10 @@ export interface CarEntity {
   aiAggressionTimer?: number;
   aiEmote?: { text: string; timer: number };
 
-  // Collision
+  // Collision & Stuck Guard
   invulnerableTimer: number;
+  hazardCooldown?: number;
+  stuckTimer?: number;
   bumpVelocityX: number;
   bumpVelocityY: number;
 
